@@ -1,0 +1,18 @@
+created:
+    - database/factories/ChurchFactory.php
+    - database/factories/BoardFactory.php
+    - database/factories/EventFactory.php
+    - database/factories/RegistrationFactory.php
+    - database/migrations/2026_06_02_190147_create_churches_table.php
+    - database/migrations/2026_06_02_190148_create_boards_table.php
+    - database/migrations/2026_06_02_190149_create_events_table.php
+    - database/migrations/2026_06_02_190150_create_registrations_table.php
+    - app/Models/Church.php
+    - app/Models/Board.php
+    - app/Models/Event.php
+    - app/Models/Registration.php
+models:
+    Church: { name: string, is_federation: 'boolean default:false', boards: 'hasMany Board', registrations: 'hasMany Registration' }
+    Board: { church_id: 'id foreign', year_start: integer, year_end: integer, president_name: string, vice_president_name: 'string nullable', secretary_name: 'string nullable', treasurer_name: 'string nullable', image_path: 'string nullable', is_active: 'boolean default:false' }
+    Event: { title: string, slug: 'string unique', description: 'longtext nullable', event_date: datetime, location: 'string nullable', price: 'decimal:10,2 default:0', requires_receipt: 'boolean default:false', custom_fields: 'json nullable', status: "enum:draft,published,closed default:'draft'", registrations: 'hasMany Registration' }
+    Registration: { event_id: 'id foreign cascadeOnDelete', church_id: 'id foreign nullable constrained', name: string, email: string, phone: string, payment_status: "enum:pending,paid,failed default:'pending'", payment_id: 'string nullable', pix_qr_code: 'longtext nullable', receipt_path: 'string nullable', custom_answers: 'json nullable' }
