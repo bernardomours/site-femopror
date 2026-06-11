@@ -56,8 +56,9 @@ class RegistrationForm
                         
                     FileUpload::make('receipt_path')
                         ->label('Comprovante de Pagamento')
+                        ->disk('public')
                         ->directory('receipts')
-                        ->acceptedFileTypes(['application/pdf', 'image/*'])
+                        ->image()
                         ->openable()
                         ->downloadable(),
                         

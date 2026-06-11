@@ -22,5 +22,9 @@ class DatabaseSeeder extends Seeder
             'email' => 'a@a',
             'password' => '123'
         ]);
+
+        $this->call([
+            ChurchSeeder::class,
+        ]);
     }
 }

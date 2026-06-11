@@ -16,8 +16,6 @@ return new class extends Migration
         Schema::create('boards', function (Blueprint $table) {
             $table->id();
             $table->foreignId('church_id')->constrained();
-            $table->integer('year_start');
-            $table->integer('year_end');
             $table->string('president_name');
             $table->string('vice_president_name')->nullable();
             $table->string('first_secretary_name')->nullable();

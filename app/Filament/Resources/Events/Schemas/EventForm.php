@@ -13,6 +13,7 @@ use Filament\Schemas\Components\Utilities\Get;
 use Filament\Schemas\Components\Utilities\Set;
 use Filament\Schemas\Schema;
 use Illuminate\Support\Str;
+use Filament\Forms\Components\FileUpload;
 
 class EventForm
 {
@@ -21,6 +22,11 @@ class EventForm
         return $schema
             ->components([
                 Section::make('Detalhes Principais')->schema([
+                    FileUpload::make('image')
+                        ->image()
+                        ->disk('public')
+                        ->directory('events-images')
+                        ->label('Imagem de Capa'),
                     TextInput::make('title')
                         ->label('Título do Evento')
                         ->required()
@@ -39,7 +45,12 @@ class EventForm
                     DateTimePicker::make('event_date')
                         ->label('Data e Hora')
                         ->required(),
-                        
+                    
+                    DateTimePicker::make('opening_date')
+                        ->label('Data de Abertura das Inscrições')
+                        ->helperText('Se deixar em branco, as inscrições abrem imediatamente. Se colocar uma data futura, o botão ficará como "Em breve".')
+                        ->nullable(),
+                                        
                     TextInput::make('location')
                         ->label('Local'),
                         
@@ -78,15 +89,16 @@ class EventForm
                                 ->label('Tipo de Resposta')
                                 ->options([
                                     'text' => 'Texto Livre',
-                                    'select' => 'Múltipla Escolha',
+                                    'select' => 'Lista Suspensa (Dropdown)',
+                                    'checkbox' => 'Múltipla Escolha (Checkboxes)',
                                 ])
                                 ->required()
                                 ->live(),
                                 
                             TextInput::make('options')
                                 ->label('Opções de Resposta')
-                                ->helperText('Separe as opções por vírgula. Ex: P, M, G, GG')
-                                ->visible(fn (Get $get) => $get('type') === 'select'),
+                                ->helperText('Separe as opções por vírgula. Ex: Futsal, Vôlei, Basquete')
+                                ->visible(fn (Get $get) => in_array($get('type'), ['select', 'checkbox'])),
                         ])
                         ->columns(3)
                         ->columnSpanFull()

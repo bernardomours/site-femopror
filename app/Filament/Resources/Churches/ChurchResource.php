@@ -19,6 +19,9 @@ class ChurchResource extends Resource
     protected static ?string $model = Church::class;
 
     protected static string|BackedEnum|null $navigationIcon = 'heroicon-o-home-modern';
+    protected static ?string $modelLabel = 'Igreja';
+    protected static ?string $pluralModelLabel = 'Igrejas';
+    protected static ?string $navigationLabel = 'Igrejas';
 
     protected static ?string $recordTitleAttribute = 'name';
 

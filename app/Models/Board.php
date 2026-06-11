@@ -17,11 +17,11 @@ class Board extends Model
      */
     protected $fillable = [
         'church_id',
-        'year_start',
-        'year_end',
         'president_name',
         'vice_president_name',
-        'secretary_name',
+        'first_secretary_name',
+        'second_secretary_name',
+        'executive_secretary_name',
         'treasurer_name',
         'image_path',
         'is_active',

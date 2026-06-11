@@ -9,6 +9,7 @@ use App\Filament\Resources\Registrations\Schemas\RegistrationForm;
 use App\Filament\Resources\Registrations\Tables\RegistrationsTable;
 use App\Models\Registration;
 use BackedEnum;
+use UnitEnum;
 use Filament\Resources\Resource;
 use Filament\Schemas\Schema;
 use Filament\Support\Icons\Heroicon;
@@ -19,6 +20,10 @@ class RegistrationResource extends Resource
     protected static ?string $model = Registration::class;
 
     protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedRectangleStack;
+    protected static ?string $modelLabel = 'Inscrição';
+    protected static ?string $pluralModelLabel = 'Inscrições';
+    protected static ?string $navigationLabel = 'Inscrições Realizadas';
+    protected static string|UnitEnum|null $navigationGroup = 'Inscrições';
 
     public static function form(Schema $schema): Schema
     {

@@ -8,6 +8,9 @@ use Filament\Actions\EditAction;
 use Filament\Tables\Table;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Filters\SelectFilter;
+use Filament\Actions\Action;
+use Filament\Notifications\Notification;
+use Filament\Tables\Enums\FiltersLayout;
 
 class RegistrationsTable
 {
@@ -62,8 +65,34 @@ class RegistrationsTable
                         'failed' => 'Cancelado',
                     ])
                     ->label('Filtrar por Status'),
-            ])
+            ],layout: FiltersLayout::AboveContent)
             ->recordActions([
+                Action::make('ver_comprovante')
+                ->label('Ver PIX')
+                ->icon('heroicon-o-eye')
+                ->color('info')
+                ->url(fn ($record) => asset('storage/' . $record->receipt_path))
+                ->openUrlInNewTab()
+                ->visible(fn ($record) => $record->receipt_path !== null),
+
+                Action::make('aprovar_pagamento')
+                    ->label('Confirmar Pagamento')
+                    ->icon('heroicon-o-check-circle')
+                    ->color('success')
+                    ->requiresConfirmation()
+                    ->modalHeading('Confirmar Recebimento do PIX')
+                    ->modalDescription('Tem certeza de que o valor já consta na conta da federação?')
+                    ->modalSubmitActionLabel('Sim, valor recebido')
+                    ->visible(fn ($record) => $record->payment_status === 'pending')
+                    ->action(function ($record) {
+                        $record->update(['payment_status' => 'paid']);
+                        
+                        Notification::make()
+                            ->title('Pagamento Aprovado!')
+                            ->success()
+                            ->send();
+                    }),
+                    
                 EditAction::make(),
             ])
             ->toolbarActions([

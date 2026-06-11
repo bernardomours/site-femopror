@@ -27,7 +27,11 @@ class AdminPanelProvider extends PanelProvider
             ->spa()
             ->default()
             ->id('admin')
+            ->brandLogo(asset('/images/filament-bg.png'))
+            ->brandLogoHeight('8rem')
+            ->brandName('FEMOPROR')
             ->path('admin')
+            ->darkMode(false)
             ->login()
             ->colors([
                 'primary' => Color::hex('#013750'),

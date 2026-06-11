@@ -19,12 +19,14 @@ class Event extends Model
         'slug',
         'description',
         'event_date',
+        'opening_date',
         'location',
         'price',
         'requires_receipt',
         'custom_fields',
         'status',
         'registrations',
+        'image',
     ];
 
     /**
@@ -37,6 +39,7 @@ class Event extends Model
         return [
             'id' => 'integer',
             'event_date' => 'datetime',
+            'opening_date' => 'datetime',
             'price' => 'decimal:2',
             'requires_receipt' => 'boolean',
             'custom_fields' => 'array',

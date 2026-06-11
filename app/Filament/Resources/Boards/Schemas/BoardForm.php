@@ -24,24 +24,17 @@ class BoardForm
                     ->columnSpanFull(),
 
                 Grid::make(2)->schema([
-                    TextInput::make('year_start')
-                        ->label('Ano de Início')
-                        ->numeric()
-                        ->required(),
-                    TextInput::make('year_end')
-                        ->label('Ano de Término')
-                        ->numeric()
-                        ->required(),
-                ]),
-
-                Grid::make(2)->schema([
                     TextInput::make('president_name')
                         ->label('Presidente')
                         ->required(),
                     TextInput::make('vice_president_name')
                         ->label('Vice-Presidente'),
-                    TextInput::make('secretary_name')
-                        ->label('Secretário(a)'),
+                    TextInput::make('first_secretary_name')
+                        ->label('1º Secretário(a)'),
+                    TextInput::make('second_secretary_name')
+                        ->label('2º Secretário(a)'),
+                    TextInput::make('executive_secretary_name')
+                        ->label('Secretário(a) Executivo(a)'),
                     TextInput::make('treasurer_name')
                         ->label('Tesoureiro(a)'),
                 ]),
@@ -49,8 +42,8 @@ class BoardForm
                 FileUpload::make('image_path')
                     ->label('Foto Oficial da Diretoria')
                     ->image()
-                    ->directory('boards')
-                    ->columnSpanFull(),
+                    ->disk('public')
+                    ->directory('boards'),
 
                 Toggle::make('is_active')
                     ->label('Diretoria Atual (Ativa)?')

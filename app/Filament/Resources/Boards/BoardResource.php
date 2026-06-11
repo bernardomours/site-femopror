@@ -19,6 +19,9 @@ class BoardResource extends Resource
     protected static ?string $model = Board::class;
 
     protected static string|BackedEnum|null $navigationIcon = 'heroicon-o-user-group';
+    protected static ?string $modelLabel = 'Diretoria';
+    protected static ?string $pluralModelLabel = 'Diretorias';
+    protected static ?string $navigationLabel = 'Diretorias';
 
     public static function form(Schema $schema): Schema
     {

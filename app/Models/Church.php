@@ -33,4 +33,9 @@ class Church extends Model
             'is_federation' => 'boolean',
         ];
     }
+
+    public function boards()
+    {
+        return $this->hasMany(Board::class);
+    }
 }
