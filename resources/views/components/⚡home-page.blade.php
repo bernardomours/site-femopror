@@ -206,7 +206,7 @@ new #[Layout('layouts.public')] class extends Component
                         <span class="text-sm">
                             <strong class="text-gray-900">Vice-Presidente:</strong> 
                             <a href="https://www.instagram.com/usuario_do_instagram/" target="_blank" rel="noopener noreferrer" class="text-green-700 hover:text-green-900 hover:underline transition font-semibold ml-1">
-                                Constanzza Chris
+                                Constanzza Nascimento
                             </a>
                         </span>
                     </li>
