@@ -30,7 +30,7 @@ class AdminPanelProvider extends PanelProvider
             ->brandLogo(asset('/images/filament-bg.png'))
             ->brandLogoHeight('8rem')
             ->brandName('FEMOPROR')
-            ->path('admin')
+            ->path('area-da-diretoria')
             ->darkMode(false)
             ->login()
             ->colors([
