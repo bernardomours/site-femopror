@@ -196,7 +196,7 @@ new #[Layout('layouts.public')] class extends Component
                     <li class="flex items-center gap-3">
                         <span class="text-sm">
                             <strong class="text-gray-900">Presidente:</strong> 
-                            <a href="https://www.instagram.com/usuario_do_instagram/" target="_blank" rel="noopener noreferrer" class="text-green-700 hover:text-green-900 hover:underline transition font-semibold ml-1">
+                            <a href="https://www.instagram.com/ezequiel.meira/" target="_blank" rel="noopener noreferrer" class="text-green-700 hover:text-green-900 hover:underline transition font-semibold ml-1">
                                 Ezequiel Meira
                             </a>
                         </span>
@@ -205,7 +205,7 @@ new #[Layout('layouts.public')] class extends Component
                     <li class="flex items-center gap-3">
                         <span class="text-sm">
                             <strong class="text-gray-900">Vice-Presidente:</strong> 
-                            <a href="https://www.instagram.com/usuario_do_instagram/" target="_blank" rel="noopener noreferrer" class="text-green-700 hover:text-green-900 hover:underline transition font-semibold ml-1">
+                            <a href="https://www.instagram.com/constzza/" target="_blank" rel="noopener noreferrer" class="text-green-700 hover:text-green-900 hover:underline transition font-semibold ml-1">
                                 Constanzza Nascimento
                             </a>
                         </span>
@@ -214,7 +214,7 @@ new #[Layout('layouts.public')] class extends Component
                     <li class="flex items-center gap-3">
                         <span class="text-sm">
                             <strong class="text-gray-900">Sec. Executivo:</strong> 
-                            <a href="https://www.instagram.com/usuario_do_instagram/" target="_blank" rel="noopener noreferrer" class="text-green-700 hover:text-green-900 hover:underline transition font-semibold ml-1">
+                            <a href="https://www.instagram.com/clarohanaa/" target="_blank" rel="noopener noreferrer" class="text-green-700 hover:text-green-900 hover:underline transition font-semibold ml-1">
                                 Clara Ohana
                             </a>
                         </span>
@@ -223,7 +223,7 @@ new #[Layout('layouts.public')] class extends Component
                     <li class="flex items-center gap-3">
                         <span class="text-sm">
                             <strong class="text-gray-900">1º Secretário:</strong> 
-                            <a href="https://www.instagram.com/usuario_do_instagram/" target="_blank" rel="noopener noreferrer" class="text-green-700 hover:text-green-900 hover:underline transition font-semibold ml-1">
+                            <a href="https://www.instagram.com/claravaleo/" target="_blank" rel="noopener noreferrer" class="text-green-700 hover:text-green-900 hover:underline transition font-semibold ml-1">
                                 Clara Manuella
                             </a>
                         </span>
@@ -241,7 +241,7 @@ new #[Layout('layouts.public')] class extends Component
                     <li class="flex items-center gap-3">
                         <span class="text-sm">
                             <strong class="text-gray-900">Tesoureiro:</strong> 
-                            <a href="https://www.instagram.com/usuario_do_instagram/" target="_blank" rel="noopener noreferrer" class="text-green-700 hover:text-green-900 hover:underline transition font-semibold ml-1">
+                            <a href="https://www.instagram.com/adsonavelino/" target="_blank" rel="noopener noreferrer" class="text-green-700 hover:text-green-900 hover:underline transition font-semibold ml-1">
                                 Adson Avelino
                             </a>
                         </span>
@@ -250,7 +250,7 @@ new #[Layout('layouts.public')] class extends Component
                     <li class="flex items-center gap-3">
                         <span class="text-sm">
                             <strong class="text-gray-900">Sec. Presbiterial:</strong> 
-                            <a href="https://www.instagram.com/usuario_do_instagram/" target="_blank" rel="noopener noreferrer" class="text-green-700 hover:text-green-900 hover:underline transition font-semibold ml-1">
+                            <a href="https://www.instagram.com/" target="_blank" rel="noopener noreferrer" class="text-green-700 hover:text-green-900 hover:underline transition font-semibold ml-1">
                                 Antônio Alex
                             </a>
                         </span>
