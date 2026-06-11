@@ -6,6 +6,7 @@ use Filament\Forms\Components\DateTimePicker;
 use Filament\Forms\Components\TextInput;
 use Filament\Schemas\Schema;
 use Filament\Forms\Components\Select;
+use Filament\Forms\Components\Toggle;
 use Illuminate\Support\Facades\Hash;
 
 class UserForm
@@ -35,6 +36,9 @@ class UserForm
                     ->searchable()
                     ->preload()
                     ->helperText('Selecione a UMP se este usuário for um presidente local.'),
+                Toggle::make('is_admin')
+                    ->label('Acesso de Administrador')
+                    ->default(false),
             ]);
     }
 }
