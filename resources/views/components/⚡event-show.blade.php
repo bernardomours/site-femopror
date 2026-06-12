@@ -113,6 +113,58 @@ new #[Layout('layouts.public')] class extends Component {
 
         return $total;
     }
+
+    public $mostrarPix = false;
+    public $pixCopiaCola = '';
+
+    public function gerarPix()
+    {
+        $chavePix = '+5584991350289';
+        $nomeTesoureiro = 'Adson Avelino';
+        $cidade = 'Mossoro';
+        
+        $valorFinal = $this->getFinalPrice();
+
+        if ($valorFinal > 0) {
+            $this->pixCopiaCola = $this->montarPayloadPix($chavePix, $nomeTesoureiro, $cidade, $valorFinal);
+            $this->mostrarPix = true;
+        }
+    }
+
+    private function montarPayloadPix($chavePix, $nomeRecebedor, $cidade, $valor)
+    {
+        $valorStr = number_format($valor, 2, '.', '');
+        
+        $payloadFormat = "000201";
+        $merchantAccount = "0014br.gov.bcb.pix01" . str_pad(strlen($chavePix), 2, '0', STR_PAD_LEFT) . $chavePix;
+        $merchantAccountInfo = "26" . str_pad(strlen($merchantAccount), 2, '0', STR_PAD_LEFT) . $merchantAccount;
+        $merchantCategoryCode = "52040000";
+        $transactionCurrency = "5303986";
+        $transactionAmount = "54" . str_pad(strlen($valorStr), 2, '0', STR_PAD_LEFT) . $valorStr;
+        $countryCode = "5802BR";
+        
+        $nome = substr(preg_replace('/[^A-Za-z0-9 ]/', '', $nomeRecebedor), 0, 25);
+        $cidade = substr(preg_replace('/[^A-Za-z0-9 ]/', '', $cidade), 0, 15);
+        
+        $merchantName = "59" . str_pad(strlen($nome), 2, '0', STR_PAD_LEFT) . $nome;
+        $merchantCity = "60" . str_pad(strlen($cidade), 2, '0', STR_PAD_LEFT) . $cidade;
+        $additionalDataFieldTemplate = "62070503***";
+        
+        $payload = $payloadFormat . $merchantAccountInfo . $merchantCategoryCode . $transactionCurrency . $transactionAmount . $countryCode . $merchantName . $merchantCity . $additionalDataFieldTemplate . "6304";
+        
+        $polinomio = 0x1021;
+        $resultado = 0xFFFF;
+        for ($i = 0; $i < strlen($payload); $i++) {
+            $resultado ^= (ord($payload[$i]) << 8);
+            for ($bit = 0; $bit < 8; $bit++) {
+                if (($resultado <<= 1) & 0x10000) $resultado ^= $polinomio;
+                $resultado &= 0xFFFF;
+            }
+        }
+        
+        return $payload . strtoupper(str_pad(dechex($resultado), 4, '0', STR_PAD_LEFT));
+    }
+    
 };
 ?>
 
@@ -156,12 +208,37 @@ new #[Layout('layouts.public')] class extends Component {
                             <div class="flex items-center gap-2 text-lg font-bold mt-2 text-green-400">
                                 <span>Valor: R$ {{ number_format($this->getFinalPrice(), 2, ',', '.') }}</span>
                             </div>
+                            <div class="mt-4">
+                                @if(!$mostrarPix)
+                                    <button type="button" wire:click="gerarPix" class="w-full bg-green-800 hover:bg-green-700 text-white font-bold py-3 rounded-xl border border-green-700 shadow-md transition-colors flex items-center justify-center gap-2">
+                                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm14 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z"></path></svg>
+                                        Gerar QR Code PIX
+                                    </button>
+                                @else
+                                    <div class="bg-white rounded-2xl p-6 mt-4 shadow-lg border border-green-800 text-center text-gray-900">
+                                        <h4 class="font-bold text-green-900 uppercase tracking-wider text-sm mb-4">Escaneie para pagar</h4>
+                                        
+                                        <div class="bg-white p-2 rounded-xl border-2 border-gray-100 inline-block mb-4 shadow-sm">
+                                            <img src="https://api.qrserver.com/v1/create-qr-code/?size=200x200&data={{ urlencode($pixCopiaCola) }}" alt="QR Code PIX" class="w-40 h-40">
+                                        </div>
+
+                                        <p class="text-xs text-gray-500 font-bold mb-2">Ou use o PIX Copia e Cola:</p>
+                                        
+                                        <div class="flex items-center bg-gray-50 border border-gray-200 rounded-lg overflow-hidden">
+                                            <input type="text" value="{{ $pixCopiaCola }}" readonly class="w-full bg-transparent text-xs text-gray-600 px-3 py-2 outline-none" id="pixCodeInput">
+                                            <button type="button" onclick="document.getElementById('pixCodeInput').select(); document.execCommand('copy'); alert('Código PIX copiado!');" class="bg-green-100 hover:bg-green-200 text-green-900 px-3 py-2 text-xs font-bold transition-colors border-l border-gray-200">
+                                                COPIAR
+                                            </button>
+                                        </div>
+                                    </div>
+                                @endif
+                            </div>
                         </div>
                     </div>
 
                     <div class="bg-white/5 border border-white/10 rounded-xl p-5 mt-8">
                         <h3 class="font-bold text-sm uppercase tracking-wide text-green-400 mb-2">Dados para Pagamento via PIX</h3>
-                        <p class="text-xs text-green-200 mb-4">Para confirmar sua inscrição, faça o pix para a chave abaixo:</p>
+                        <p class="text-xs text-green-200 mb-4">Para confirmar sua inscrição, escaneie o QR-CODE ou faça o pix para a chave abaixo:</p>
                         
                         <div class="bg-black/20 p-3 rounded-lg flex items-center justify-between border border-black/10">
                             <span class="text-xs font-mono select-all text-white">84991350289</span>
