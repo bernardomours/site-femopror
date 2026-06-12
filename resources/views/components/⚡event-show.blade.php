@@ -97,14 +97,14 @@ new #[Layout('layouts.public')] class extends Component {
             
             if (is_array($resposta)) {
                 foreach ($resposta as $item) {
-                    if (preg_match('/\(\+[^0-9]*(\d+[.,]?\d*)[^)]*\)/', $item, $matches)) {
+                    if (preg_match('/\(\+?[^0-9]*(\d+[.,]?\d*)[^)]*\)/', $item, $matches)) {
                         $valorAdicional = (float) str_replace(',', '.', $matches[1]);
                         $total += $valorAdicional;
                     }
                 }
             } 
             else {
-                if (preg_match('/\(\+[^0-9]*(\d+[.,]?\d*)[^)]*\)/', $resposta, $matches)) {
+                if (preg_match('/\(\+?[^0-9]*(\d+[.,]?\d*)[^)]*\)/', $resposta, $matches)) {
                     $valorAdicional = (float) str_replace(',', '.', $matches[1]);
                     $total += $valorAdicional;
                 }
