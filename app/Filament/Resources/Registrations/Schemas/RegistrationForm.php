@@ -54,9 +54,19 @@ class RegistrationForm
                         ->default('pending')
                         ->required(),
                         
+                    TextInput::make('amount_paid')
+                        ->label('Valor cobrado')
+                        ->helperText('Calculado no momento da inscrição, com os adicionais escolhidos.')
+                        ->numeric()
+                        ->prefix('R$')
+                        ->disabled()
+                        ->dehydrated(false),
+
                     FileUpload::make('receipt_path')
                         ->label('Comprovante de Pagamento')
-                        ->disk('public')
+                        // Comprovante bancário sai do disco público.
+                        ->disk(config('femopror.uploads.disk'))
+                        ->visibility('private')
                         ->directory('receipts')
                         ->image()
                         ->openable()

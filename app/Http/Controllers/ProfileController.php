@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Http\Requests\ProfileUpdateRequest;
+use App\Models\Church;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -18,6 +19,9 @@ class ProfileController extends Controller
     {
         return view('profile.edit', [
             'user' => $request->user(),
+            // Igreja e telefone moram na conta para o formulário de inscrição
+            // não pedir os mesmos dados a cada evento.
+            'churches' => Church::orderBy('name')->get(['id', 'name']),
         ]);
     }
 

@@ -49,9 +49,14 @@ class CongressSubscriptionForm
 
                     FileUpload::make('receipt_path')
                         ->label('Comprovante de Pagamento (PIX)')
+                        // Disco privado: o link gerado é assinado e expira, em
+                        // vez de ficar valendo para sempre para qualquer um.
+                        ->disk(config('femopror.uploads.disk'))
+                        ->visibility('private')
                         ->downloadable()
                         ->openable()
                         ->disabled()
+                        ->dehydrated(false)
                         ->columnSpanFull(),
                 ])->columns(2),
 
@@ -67,13 +72,16 @@ class CongressSubscriptionForm
                             
                             FileUpload::make('file_path')
                                 ->label('Arquivo (PDF)')
+                                ->disk(config('femopror.uploads.disk'))
+                                ->visibility('private')
                                 ->downloadable()
                                 ->openable(),
                         ])
                         ->columns(2)
                         ->disabled()
-                        ->deletable(false) 
-                        ->addable(false), 
+                        ->dehydrated(false)
+                        ->deletable(false)
+                        ->addable(false),
                 ]),
 
             Section::make('Lista de Inscritos')

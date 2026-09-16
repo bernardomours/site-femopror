@@ -1,45 +1,53 @@
-<x-guest-layout>
-    <!-- Session Status -->
-    <x-auth-session-status class="mb-4" :status="session('status')" />
+{{-- Classe pelo nome completo de propósito: `@php use ... @endphp` numa view
+     Blade acaba fora do topo do arquivo compilado e quebra com
+     "unexpected token use". --}}
+<x-guest-layout
+    title="Entrar"
+    :subtitle="\App\Support\IntendedUrl::hasDestination()
+        ? 'Depois de entrar você volta direto para a inscrição, sem perder o que já escolheu.'
+        : 'Acesse sua conta para se inscrever nos eventos e acompanhar o status das suas inscrições.'">
 
-    <form method="POST" action="{{ route('login') }}">
+    <x-auth-session-status class="mb-6" :status="session('status')" />
+
+    <form method="POST" action="{{ route('login') }}" class="space-y-5">
         @csrf
 
         <div>
-            <x-input-label for="email" value="{{ __('E-mail') }}" />
-            <x-text-input id="email" class="block mt-1 w-full" type="email" name="email" :value="old('email')" required autofocus autocomplete="username" />
-            <x-input-error :messages="$errors->get('email')" class="mt-2" />
+            <x-input-label for="email" value="E-mail" />
+            <x-text-input id="email" name="email" type="email" :value="old('email')" placeholder="voce@exemplo.com" required autofocus autocomplete="username" />
+            <x-input-error :messages="$errors->get('email')" />
         </div>
 
-        <div class="mt-4">
-            <x-input-label for="password" value="{{ __('Senha') }}" />
-            <x-text-input id="password" class="block mt-1 w-full" type="password" name="password" required autocomplete="current-password" />
-            <x-input-error :messages="$errors->get('password')" class="mt-2" />
-        </div>
+        <div>
+            <div class="flex items-baseline justify-between gap-2">
+                <x-input-label for="password" value="Senha" class="mb-1.5" />
 
-        <div class="block mt-4">
-            <label for="remember_me" class="inline-flex items-center">
-                <input id="remember_me" type="checkbox" class="rounded border-gray-300 text-green-800 shadow-sm focus:ring-green-800" name="remember">
-                <span class="ms-2 text-sm text-gray-600">{{ __('Lembrar de mim') }}</span>
-            </label>
-        </div>
-
-        <div class="flex items-center justify-between mt-6">
-            <a class="underline text-sm text-green-700 hover:text-green-900 font-bold" href="{{ route('register') }}">
-                Não tem conta? Cadastre-se
-            </a>
-
-            <div class="flex items-center gap-4">
                 @if (Route::has('password.request'))
-                    <a class="underline text-sm text-gray-600 hover:text-gray-900" href="{{ route('password.request') }}">
-                        {{ __('Esqueceu a senha?') }}
+                    <a class="mb-1.5 text-xs font-medium text-gray-500 transition-colors hover:text-green-900" href="{{ route('password.request') }}">
+                        Esqueceu a senha?
                     </a>
                 @endif
-
-                <x-primary-button class="bg-green-900 hover:bg-green-800">
-                    {{ __('Entrar') }}
-                </x-primary-button>
             </div>
+
+            <x-text-input id="password" name="password" type="password" placeholder="••••••••" required autocomplete="current-password" />
+            <x-input-error :messages="$errors->get('password')" />
         </div>
+
+        <label for="remember_me" class="flex cursor-pointer items-center gap-2.5 select-none">
+            <input id="remember_me" name="remember" type="checkbox"
+                   class="h-4 w-4 rounded border-gray-300 text-green-900 transition focus:ring-1 focus:ring-green-900 focus:ring-offset-0">
+            <span class="text-sm text-gray-600">Continuar conectado neste dispositivo</span>
+        </label>
+
+        <x-primary-button class="w-full">Entrar</x-primary-button>
     </form>
+
+    <div class="mt-6 border-t border-gray-100 pt-6 text-center text-sm text-gray-500">
+        Ainda não tem conta?
+        {{-- O link leva o destino junto: alternar entre as duas telas não pode
+             fazer a pessoa perder o evento de onde ela veio. --}}
+        <a href="{{ \App\Support\IntendedUrl::linkTo('register') }}" class="font-semibold text-green-900 transition-colors hover:text-green-700">
+            Criar conta
+        </a>
+    </div>
 </x-guest-layout>

@@ -1,52 +1,44 @@
-<x-guest-layout>
-    <form method="POST" action="{{ route('register') }}">
+{{-- Ver a nota em login.blade.php sobre por que a classe vai pelo nome completo. --}}
+<x-guest-layout
+    title="Criar conta"
+    :subtitle="\App\Support\IntendedUrl::hasDestination()
+        ? 'Leva um minuto. Assim que terminar, você volta para a página do evento para concluir a inscrição.'
+        : 'Leva um minuto. Depois é só completar o perfil com a sua igreja e o WhatsApp, e as inscrições já vêm preenchidas.'">
+
+    <form method="POST" action="{{ route('register') }}" class="space-y-5">
         @csrf
 
-        <!-- Name -->
         <div>
-            <x-input-label for="name" :value="__('Name')" />
-            <x-text-input id="name" class="block mt-1 w-full" type="text" name="name" :value="old('name')" required autofocus autocomplete="name" />
-            <x-input-error :messages="$errors->get('name')" class="mt-2" />
+            <x-input-label for="name" value="Nome completo" />
+            <x-text-input id="name" name="name" type="text" :value="old('name')" placeholder="Como você quer ser chamado" required autofocus autocomplete="name" />
+            <x-input-error :messages="$errors->get('name')" />
         </div>
 
-        <!-- Email Address -->
-        <div class="mt-4">
-            <x-input-label for="email" :value="__('Email')" />
-            <x-text-input id="email" class="block mt-1 w-full" type="email" name="email" :value="old('email')" required autocomplete="username" />
-            <x-input-error :messages="$errors->get('email')" class="mt-2" />
+        <div>
+            <x-input-label for="email" value="E-mail" />
+            <x-text-input id="email" name="email" type="email" :value="old('email')" placeholder="voce@exemplo.com" required autocomplete="username" />
+            <x-input-error :messages="$errors->get('email')" />
         </div>
 
-        <!-- Password -->
-        <div class="mt-4">
-            <x-input-label for="password" :value="__('Password')" />
-
-            <x-text-input id="password" class="block mt-1 w-full"
-                            type="password"
-                            name="password"
-                            required autocomplete="new-password" />
-
-            <x-input-error :messages="$errors->get('password')" class="mt-2" />
+        <div>
+            <x-input-label for="password" value="Senha" />
+            <x-text-input id="password" name="password" type="password" placeholder="Pelo menos 8 caracteres" required autocomplete="new-password" />
+            <x-input-error :messages="$errors->get('password')" />
         </div>
 
-        <!-- Confirm Password -->
-        <div class="mt-4">
-            <x-input-label for="password_confirmation" :value="__('Confirm Password')" />
-
-            <x-text-input id="password_confirmation" class="block mt-1 w-full"
-                            type="password"
-                            name="password_confirmation" required autocomplete="new-password" />
-
-            <x-input-error :messages="$errors->get('password_confirmation')" class="mt-2" />
+        <div>
+            <x-input-label for="password_confirmation" value="Confirme a senha" />
+            <x-text-input id="password_confirmation" name="password_confirmation" type="password" placeholder="Repita a senha" required autocomplete="new-password" />
+            <x-input-error :messages="$errors->get('password_confirmation')" />
         </div>
 
-        <div class="flex items-center justify-end mt-4">
-            <a class="underline text-sm text-gray-600 hover:text-gray-900 rounded-md focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500" href="{{ route('login') }}">
-                {{ __('Already registered?') }}
-            </a>
-
-            <x-primary-button class="ms-4">
-                {{ __('Register') }}
-            </x-primary-button>
-        </div>
+        <x-primary-button class="w-full">Criar minha conta</x-primary-button>
     </form>
+
+    <div class="mt-6 border-t border-gray-100 pt-6 text-center text-sm text-gray-500">
+        Já tem conta?
+        <a href="{{ \App\Support\IntendedUrl::linkTo('login') }}" class="font-semibold text-green-900 transition-colors hover:text-green-700">
+            Entrar
+        </a>
+    </div>
 </x-guest-layout>

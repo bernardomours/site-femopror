@@ -47,6 +47,42 @@ return [
             'report' => false,
         ],
 
+        /*
+         * Cloudflare R2. É S3-compatível, então usa o mesmo driver — o que muda
+         * é o endpoint (a conta é um subdomínio de r2.cloudflarestorage.com) e
+         * a região, que no R2 é sempre "auto".
+         *
+         * `visibility => private` é o ponto: comprovante de PIX não fica em
+         * endereço público. O acesso sai por URL assinada (o R2 suporta as
+         * presigned URLs do S3 nativamente), gerada só para quem está logado
+         * no painel — igual ao que o disco `local` já fazia.
+         */
+        'r2' => [
+            'driver' => 's3',
+            'key' => env('R2_ACCESS_KEY_ID'),
+            'secret' => env('R2_SECRET_ACCESS_KEY'),
+            'region' => 'auto',
+            'bucket' => env('R2_BUCKET'),
+            'endpoint' => env('R2_ENDPOINT'),
+            'use_path_style_endpoint' => true,
+            'visibility' => 'private',
+            'throw' => true,
+            'report' => false,
+
+            /*
+             * Desde a versão 3.3xx o SDK da AWS manda `x-amz-checksum-crc32` em
+             * todo PutObject (`when_supported`, o padrão). O R2 não implementa
+             * todos os algoritmos que a AWS assume, e a falha aparece como um
+             * "NotImplemented" ou "InvalidRequest" genérico no upload — sem
+             * nenhuma pista de que o problema é o checksum.
+             *
+             * `when_required` só calcula quando a operação realmente exige. O
+             * upload continua íntegro: a assinatura SigV4 já cobre o conteúdo.
+             */
+            'request_checksum_calculation' => 'when_required',
+            'response_checksum_validation' => 'when_required',
+        ],
+
         's3' => [
             'driver' => 's3',
             'key' => env('AWS_ACCESS_KEY_ID'),

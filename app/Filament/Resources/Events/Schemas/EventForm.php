@@ -67,8 +67,18 @@ class EventForm
                             'published' => 'Publicado (Inscrições Abertas)',
                             'closed' => 'Encerrado',
                         ])
+                        ->native(false)
                         ->default('draft')
                         ->required(),
+
+                    // Isto era deduzido de str_contains($title, 'congresso'):
+                    // renomear o evento desligava o fluxo de delegado/visitante
+                    // e zerava a contagem do painel.
+                    Toggle::make('is_congress')
+                        ->label('É um congresso?')
+                        ->helperText('Liga a escolha entre "Sou Visitante" e "Sou Delegado" na página do evento, e o painel de inscrições das UMPs.')
+                        ->default(false)
+                        ->columnSpanFull(),
                 ])->columns(2),
 
                 Section::make('Configurações de Inscrição')->schema([

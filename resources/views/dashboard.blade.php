@@ -1,119 +1,168 @@
 <x-app-layout>
+    <x-slot name="title">Minhas inscrições</x-slot>
+
     <x-slot name="header">
-        <h2 class="font-semibold text-xl text-gray-800 leading-tight">
-            Painel do Participante
-        </h2>
+        <div>
+            <h2 class="text-xl font-bold tracking-tight text-gray-900">Minhas inscrições</h2>
+            <p class="mt-1 text-sm text-gray-500">Olá, {{ explode(' ', auth()->user()->name)[0] }}. Aqui ficam os eventos em que você está inscrito e o andamento de cada um.</p>
+        </div>
     </x-slot>
 
-    <div class="py-12">
-        <div class="max-w-7xl mx-auto sm:px-6 lg:px-8 space-y-6">
-            
-            <div class="bg-white overflow-hidden shadow-sm sm:rounded-lg">
-                <div class="p-6 text-gray-900 text-lg">
-                    Olá, <strong>{{ auth()->user()->name }}</strong>! Bem-vindo(a) à sua área exclusiva.
-                </div>
-            </div>
+    <div class="mx-auto max-w-5xl space-y-4 px-4 py-10 sm:px-6 lg:px-8">
 
-            @foreach($inscricoesAvulsas as $inscricao)
-            <div x-data="{ showDetails: false }" class="bg-white border-l-4 border-green-600 overflow-hidden shadow-sm sm:rounded-lg mb-4">
-                <div class="p-6">
-                    
-                    <div class="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-4">
+        @if(blank(auth()->user()->church_id) || blank(auth()->user()->phone))
+            {{-- Perfil incompleto significa digitar igreja e telefone de novo a
+                 cada inscrição. Um aviso discreto, sem virar banner. --}}
+            <div class="flex flex-col gap-3 rounded-xl border border-gray-200 bg-white p-4 sm:flex-row sm:items-center sm:justify-between">
+                <div class="flex items-start gap-3">
+                    <svg class="mt-0.5 h-5 w-5 flex-shrink-0 text-gray-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+                        <circle cx="12" cy="12" r="9" /><path stroke-linecap="round" d="M12 16v-4m0-3.5h.01" />
+                    </svg>
+                    <p class="text-sm leading-relaxed text-gray-600">
+                        Complete seu perfil com a <strong class="font-medium text-gray-900">igreja</strong> e o
+                        <strong class="font-medium text-gray-900">WhatsApp</strong> — assim as próximas inscrições já vêm preenchidas.
+                    </p>
+                </div>
+
+                <a href="{{ route('profile.edit') }}" class="flex-shrink-0 rounded-lg border border-gray-200 px-3.5 py-2 text-center text-sm font-semibold text-gray-700 transition-colors hover:bg-gray-50">
+                    Completar perfil
+                </a>
+            </div>
+        @endif
+
+        @foreach($inscricoesAvulsas as $inscricao)
+            <div x-data="{ showDetails: false }" class="overflow-hidden rounded-xl border border-gray-200 bg-white">
+                <div class="border-l-2 border-green-800 p-6">
+
+                    <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                         <div>
-                            <h3 class="text-lg font-bold text-green-800 mb-1">Inscrição Individual</h3>
-                            <p class="text-gray-600"><strong>Evento:</strong> {{ $inscricao->event->title ?? 'Evento Indisponível' }}</p>
-                            <p class="text-gray-500 text-sm mt-1"> Inscrição realizada em {{ $inscricao->created_at->format('d/m/Y') }}</p>
+                            <p class="text-xs font-medium uppercase tracking-wide text-gray-400">Inscrição individual</p>
+                            <h3 class="mt-1 text-lg font-semibold text-gray-900">{{ $inscricao->event->title ?? 'Evento indisponível' }}</h3>
+
+                            <div class="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-gray-500">
+                                <span>Enviada em {{ $inscricao->created_at->format('d/m/Y') }}</span>
+
+                                @if($inscricao->amount_paid !== null)
+                                    <span class="tabular-nums">R$ {{ number_format((float) $inscricao->amount_paid, 2, ',', '.') }}</span>
+                                @endif
+                            </div>
                         </div>
-                        
-                        <div class="flex flex-col items-start sm:items-end gap-3 flex-shrink-0">
-                            <span class="px-4 py-1.5 {{ $inscricao->payment_status === 'paid' ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800' }} rounded-full text-sm font-bold uppercase tracking-wider shadow-sm inline-block">
-                                {{ $inscricao->payment_status === 'paid' ? 'Pago / Confirmado' : 'Inscrição em Análise' }}
+
+                        <div class="flex flex-col items-start gap-3 sm:flex-shrink-0 sm:items-end">
+                            <span @class([
+                                'inline-block rounded-lg px-3 py-1 text-xs font-semibold',
+                                'bg-green-50 text-green-800' => $inscricao->isPaid(),
+                                'bg-amber-50 text-amber-800' => ! $inscricao->isPaid(),
+                            ])>
+                                {{ $inscricao->isPaid() ? 'Pagamento confirmado' : 'Em análise' }}
                             </span>
 
-                            <button type="button" @click="showDetails = !showDetails" class="text-sm text-green-700 hover:text-green-900 font-bold flex items-center gap-1 transition-colors">
-                                <span x-text="showDetails ? 'Ocultar detalhes' : 'Ver detalhes da inscrição'"></span>
-                                <svg class="w-4 h-4 transition-transform duration-300" :class="{'rotate-180': showDetails}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
+                            <button type="button" @click="showDetails = ! showDetails" :aria-expanded="showDetails"
+                                    class="flex items-center gap-1 text-sm font-medium text-gray-500 transition-colors hover:text-green-900">
+                                <span x-text="showDetails ? 'Ocultar detalhes' : 'Ver detalhes'">Ver detalhes</span>
+                                <svg class="h-4 w-4 transition-transform duration-200" :class="{'rotate-180': showDetails}" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" />
+                                </svg>
                             </button>
                         </div>
                     </div>
 
-                    <div x-show="showDetails" 
+                    <div x-show="showDetails" x-cloak
                         x-transition:enter="transition ease-out duration-200"
-                        x-transition:enter-start="opacity-0 translate-y-[-10px]"
+                        x-transition:enter-start="opacity-0 -translate-y-2"
                         x-transition:enter-end="opacity-100 translate-y-0"
-                        style="display: none;" 
-                        class="mt-6 pt-6 border-t border-gray-100">
-                        
-                        <h4 class="text-xs font-bold text-gray-400 uppercase tracking-wider mb-4">Dados fornecidos na inscrição</h4>
-                        
-                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                            <div>
-                                <span class="block text-xs font-semibold text-gray-500 mb-0.5">Nome Completo</span>
-                                <span class="text-gray-900 font-medium">{{ $inscricao->name }}</span>
-                            </div>
-                            
-                            <div>
-                                <span class="block text-xs font-semibold text-gray-500 mb-0.5">E-mail</span>
-                                <span class="text-gray-900 font-medium">{{ $inscricao->email }}</span>
-                            </div>
-                            
-                            <div>
-                                <span class="block text-xs font-semibold text-gray-500 mb-0.5">WhatsApp / Telefone</span>
-                                <span class="text-gray-900 font-medium">{{ $inscricao->phone }}</span>
-                            </div>
-                            
-                            <div>
-                                <span class="block text-xs font-semibold text-gray-500 mb-0.5">Igreja Local</span>
-                                <span class="text-gray-900 font-medium">{{ $inscricao->church->name ?? 'Não informada' }}</span>
-                            </div>
+                        class="mt-6 border-t border-gray-100 pt-6">
+
+                        <h4 class="mb-4 text-xs font-semibold uppercase tracking-wide text-gray-400">Dados enviados</h4>
+
+                        <dl class="grid grid-cols-1 gap-x-6 gap-y-4 sm:grid-cols-2">
+                            @foreach([
+                                ['Nome completo', $inscricao->name],
+                                ['E-mail', $inscricao->email],
+                                ['WhatsApp', $inscricao->phone],
+                                ['Igreja local', $inscricao->church->name ?? 'Não informada'],
+                            ] as [$rotulo, $valor])
+                                <div>
+                                    <dt class="mb-0.5 text-xs font-medium text-gray-500">{{ $rotulo }}</dt>
+                                    <dd class="text-sm text-gray-900">{{ $valor }}</dd>
+                                </div>
+                            @endforeach
 
                             @if(is_array($inscricao->custom_answers))
                                 @foreach($inscricao->custom_answers as $pergunta => $resposta)
                                     <div>
-                                        <span class="block text-xs font-semibold text-gray-500 mb-0.5">{{ $pergunta }}</span>
-                                        <span class="text-gray-900 font-medium">
-                                            @if(empty($resposta))
-                                                Não respondido
+                                        <dt class="mb-0.5 text-xs font-medium text-gray-500">{{ $pergunta }}</dt>
+                                        <dd class="text-sm text-gray-900">
+                                            @if(blank($resposta))
+                                                <span class="text-gray-400">Não respondido</span>
                                             @elseif(is_array($resposta))
                                                 {{ implode(', ', $resposta) }}
                                             @else
                                                 {{ $resposta }}
                                             @endif
-                                        </span>
+                                        </dd>
                                     </div>
                                 @endforeach
                             @endif
-                        </div>
+                        </dl>
                     </div>
 
                 </div>
             </div>
         @endforeach
 
-            @foreach($inscricoesDelegado as $delegado)
-                <div class="bg-white border-l-4 border-blue-600 overflow-hidden shadow-sm sm:rounded-lg">
-                    <div class="p-6">
-                        <div class="flex items-center gap-3 mb-2">
-                            <svg class="w-6 h-6 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"></path></svg>
-                            <h3 class="text-lg font-bold text-blue-800">Delegado Oficial</h3>
+        @foreach($inscricoesDelegado as $delegado)
+            @php($inscricaoUmp = $delegado->congressSubscription)
+
+            <div class="overflow-hidden rounded-xl border border-gray-200 bg-white">
+                <div class="border-l-2 border-blue-700 p-6">
+                    <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                        <div>
+                            <p class="text-xs font-medium uppercase tracking-wide text-gray-400">
+                                {{ $delegado->type === 'visitante' ? 'Visitante pela UMP' : 'Delegado oficial' }}
+                            </p>
+                            <h3 class="mt-1 text-lg font-semibold text-gray-900">{{ $inscricaoUmp?->event?->title ?? 'Congresso a definir' }}</h3>
+
+                            <p class="mt-2 text-sm text-gray-500">
+                                Inscrito pela {{ $inscricaoUmp?->church?->name ?? 'sua igreja' }}.
+                            </p>
                         </div>
-                        <p class="text-gray-600">Você foi inscrito(a) como credenciado oficial pela sua igreja.</p>
-                        <p class="text-gray-600 mt-2"><strong>UMP Local:</strong> {{ $delegado->congressSubscription->church->name ?? 'Sua Igreja' }}</p>
+
+                        @if($inscricaoUmp)
+                            <span @class([
+                                'inline-block flex-shrink-0 rounded-lg px-3 py-1 text-xs font-semibold',
+                                'bg-green-50 text-green-800' => $inscricaoUmp->status === 'aprovado',
+                                'bg-red-50 text-red-700' => $inscricaoUmp->status === 'recusado',
+                                'bg-amber-50 text-amber-800' => ! in_array($inscricaoUmp->status, ['aprovado', 'recusado']),
+                            ])>
+                                {{ match($inscricaoUmp->status) {
+                                    'aprovado' => 'Confirmada',
+                                    'recusado' => 'Com pendências',
+                                    default => 'Em análise',
+                                } }}
+                            </span>
+                        @endif
                     </div>
                 </div>
-            @endforeach
+            </div>
+        @endforeach
 
-            @if($inscricoesAvulsas->isEmpty() && $inscricoesDelegado->isEmpty())
-                <div class="bg-gray-50 border border-gray-200 border-dashed rounded-lg p-10 text-center">
-                    <svg class="w-12 h-12 text-gray-400 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4"></path></svg>
-                    <h3 class="text-lg font-bold text-gray-900">Nenhuma inscrição encontrada</h3>
-                    <p class="text-gray-500 mt-2">Você ainda não está inscrito em nenhum evento ou o presidente da sua UMP ainda não enviou a lista de delegados.</p>
-                    <a href="/#eventos" class="inline-block mt-4 px-6 py-2 bg-green-800 text-white font-bold rounded-lg hover:bg-green-700 transition-colors">
-                        Ver Próximos Eventos
-                    </a>
-                </div>
-            @endif
+        @if($inscricoesAvulsas->isEmpty() && $inscricoesDelegado->isEmpty())
+            <div class="rounded-xl border border-dashed border-gray-300 bg-white px-6 py-16 text-center">
+                <svg class="mx-auto mb-4 h-10 w-10 text-gray-300" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" aria-hidden="true">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4" />
+                </svg>
 
-        </div>
+                <h3 class="text-base font-semibold text-gray-900">Nenhuma inscrição ainda</h3>
+                <p class="mx-auto mt-1.5 max-w-sm text-sm leading-relaxed text-gray-500">
+                    Você ainda não se inscreveu em nenhum evento, e a sua UMP não te incluiu na lista de delegados.
+                </p>
+
+                <a href="{{ route('home') }}#eventos" class="mt-6 inline-flex items-center rounded-lg bg-green-900 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-green-800">
+                    Ver próximos eventos
+                </a>
+            </div>
+        @endif
+
     </div>
 </x-app-layout>

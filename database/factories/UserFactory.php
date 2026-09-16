@@ -2,6 +2,7 @@
 
 namespace Database\Factories;
 
+use App\Models\Church;
 use App\Models\User;
 use Illuminate\Database\Eloquent\Factories\Factory;
 use Illuminate\Support\Facades\Hash;
@@ -40,6 +41,36 @@ class UserFactory extends Factory
     {
         return $this->state(fn (array $attributes) => [
             'email_verified_at' => null,
+        ]);
+    }
+
+    /** Administrador da federação: enxerga todas as igrejas. */
+    public function admin(): static
+    {
+        return $this->state(['is_admin' => true, 'church_id' => null]);
+    }
+
+    /** Presidente de UMP local: acessa /ump, escopado à própria igreja. */
+    public function ofChurch(Church|int $church): static
+    {
+        return $this->state([
+            'is_admin' => false,
+            'is_church_president' => true,
+            'church_id' => $church instanceof Church ? $church->id : $church,
+        ]);
+    }
+
+    /**
+     * Jovem que só escolheu a própria igreja no perfil. Não é presidente e
+     * portanto NÃO acessa o /ump — a distinção que faz o campo poder ficar
+     * aberto no perfil.
+     */
+    public function memberOfChurch(Church|int $church): static
+    {
+        return $this->state([
+            'is_admin' => false,
+            'is_church_president' => false,
+            'church_id' => $church instanceof Church ? $church->id : $church,
         ]);
     }
 }

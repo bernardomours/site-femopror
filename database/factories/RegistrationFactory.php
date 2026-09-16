@@ -4,26 +4,35 @@ namespace Database\Factories;
 
 use App\Models\Church;
 use App\Models\Event;
+use App\Models\Registration;
+use App\Models\User;
 use Illuminate\Database\Eloquent\Factories\Factory;
 
+/**
+ * @extends Factory<Registration>
+ */
 class RegistrationFactory extends Factory
 {
-    /**
-     * Define the model's default state.
-     */
     public function definition(): array
     {
         return [
             'event_id' => Event::factory(),
             'church_id' => Church::factory(),
+            'user_id' => User::factory(),
             'name' => fake()->name(),
             'email' => fake()->safeEmail(),
-            'phone' => fake()->phoneNumber(),
-            'payment_status' => fake()->randomElement(["pending","paid","failed"]),
-            'payment_id' => fake()->word(),
-            'pix_qr_code' => fake()->text(),
-            'receipt_path' => fake()->word(),
-            'custom_answers' => '{}',
+            'phone' => (string) fake()->numberBetween(84900000000, 84999999999),
+            'payment_status' => 'pending',
+            'payment_id' => null,
+            'pix_qr_code' => null,
+            'receipt_path' => 'receipts/exemplo.jpg',
+            'amount_paid' => fake()->randomFloat(2, 0, 250),
+            'custom_answers' => [],
         ];
+    }
+
+    public function paid(): static
+    {
+        return $this->state(['payment_status' => 'paid']);
     }
 }

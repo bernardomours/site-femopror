@@ -27,6 +27,13 @@
         <env name="DB_DATABASE" value=":memory:"/>
         <env name="DB_URL" value=""/>
         <env name="MAIL_MAILER" value="array"/>
+        <!--
+            Trava para os testes nunca tocarem no bucket de produção. Sem isto,
+            um teste que esqueça o Storage::fake() grava de verdade no R2: foi
+            o que aconteceu — sobraram 7 arquivos lá dentro. O fake continua nos
+            testes; isto é a segunda linha de defesa.
+        -->
+        <env name="UPLOADS_DISK" value="local"/>
         <env name="QUEUE_CONNECTION" value="sync"/>
         <env name="SESSION_DRIVER" value="array"/>
         <env name="PULSE_ENABLED" value="false"/>

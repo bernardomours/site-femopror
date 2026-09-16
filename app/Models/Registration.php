@@ -27,6 +27,7 @@ class Registration extends Model
         'pix_qr_code',
         'receipt_path',
         'custom_answers',
+        'amount_paid',
     ];
 
     /**
@@ -40,6 +41,8 @@ class Registration extends Model
             'id' => 'integer',
             'event_id' => 'integer',
             'church_id' => 'integer',
+            'user_id' => 'integer',
+            'amount_paid' => 'decimal:2',
             'custom_answers' => 'array',
         ];
     }
@@ -52,5 +55,15 @@ class Registration extends Model
     public function church(): BelongsTo
     {
         return $this->belongsTo(Church::class);
+    }
+
+    public function user(): BelongsTo
+    {
+        return $this->belongsTo(User::class);
+    }
+
+    public function isPaid(): bool
+    {
+        return $this->payment_status === 'paid';
     }
 }

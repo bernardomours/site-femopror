@@ -1,3 +1,28 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+@layer base {
+    /* Sem isto, o conteúdo controlado por x-show pisca na tela antes de o
+       Alpine iniciar. Os modais usavam style="display:none" à mão para
+       contornar; agora a regra existe de verdade. */
+    [x-cloak] {
+        display: none !important;
+    }
+
+    html {
+        scroll-behavior: smooth;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+        html {
+            scroll-behavior: auto;
+        }
+    }
+
+    /* O menu é sticky: sem isto, clicar em "Eventos" levava a seção para
+       debaixo da barra e o título ficava escondido. */
+    [id] {
+        scroll-margin-top: 6rem;
+    }
+}

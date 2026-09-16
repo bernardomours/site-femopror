@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -44,5 +45,28 @@ class Board extends Model
     public function church(): BelongsTo
     {
         return $this->belongsTo(Church::class);
+    }
+
+    public function scopeActive(Builder $query): Builder
+    {
+        return $query->where('is_active', true);
+    }
+
+    protected static function booted(): void
+    {
+        // A home mostra `$church->boards->first()` assumindo uma diretoria ativa
+        // por igreja, mas nada garantia isso: marcar a diretoria nova sem
+        // desmarcar a antiga deixava as duas ativas e a página exibia a que o
+        // banco devolvesse primeiro — normalmente a mais velha.
+        static::saved(function (self $board) {
+            if (! $board->is_active) {
+                return;
+            }
+
+            static::where('church_id', $board->church_id)
+                ->whereKeyNot($board->getKey())
+                ->where('is_active', true)
+                ->update(['is_active' => false]);
+        });
     }
 }

@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Auth;
 
 use App\Http\Controllers\Controller;
 use App\Models\User;
+use App\Support\IntendedUrl;
 use Illuminate\Auth\Events\Registered;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -18,8 +19,12 @@ class RegisteredUserController extends Controller
     /**
      * Display the registration view.
      */
-    public function create(): View
+    public function create(Request $request): View
     {
+        // Mesma ideia do login: quem cria a conta na página da Copa volta para
+        // a Copa, com o formulário de inscrição já aberto.
+        IntendedUrl::rememberFrom($request);
+
         return view('auth.register');
     }
 
@@ -46,6 +51,8 @@ class RegisteredUserController extends Controller
 
         Auth::login($user);
 
-        return redirect(route('dashboard', absolute: false));
+        // Era um redirect fixo para o dashboard, que ignorava o `intended` e
+        // largava no meio do caminho quem estava tentando se inscrever.
+        return redirect()->intended(route('dashboard', absolute: false));
     }
 }

@@ -11,17 +11,20 @@ use App\Models\CongressSubscription;
 use BackedEnum;
 use Filament\Resources\Resource;
 use Filament\Schemas\Schema;
-use Filament\Support\Icons\Heroicon;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Model;
 
 class CongressSubscriptionResource extends Resource
 {
     protected static ?string $model = CongressSubscription::class;
 
     protected static string|BackedEnum|null $navigationIcon = 'heroicon-o-clipboard-document-check';
+
     protected static ?string $modelLabel = 'Inscrição - Congresso';
+
     protected static ?string $pluralModelLabel = 'Inscrição - Congresso';
+
     protected static ?string $navigationLabel = 'Inscrição - Congresso';
 
     public static function form(Schema $schema): Schema
@@ -50,9 +53,48 @@ class CongressSubscriptionResource extends Resource
         ];
     }
 
+    /**
+     * Escopo da igreja do usuário. É por aqui que o Filament também resolve o
+     * `{record}` da tela de edição, então a URL direta de outra UMP dá 404.
+     *
+     * Antes era `where('church_id', $user->church_id)` direto: para um admin
+     * (church_id nulo) isso virava `where church_id is null` e a tela ficava
+     * sempre vazia, sem explicação.
+     */
     public static function getEloquentQuery(): Builder
     {
-        return parent::getEloquentQuery()
-            ->where('church_id', data_get(auth()->user(), 'church_id'));
+        $query = parent::getEloquentQuery();
+        $user = auth()->user();
+
+        if ($user?->isAdmin()) {
+            return $query;
+        }
+
+        return $query->where('church_id', $user?->church_id ?? 0);
+    }
+
+    /**
+     * Só o presidente da UMP envia inscrição. Ter igreja não basta — todo jovem
+     * escolhe a própria igreja no perfil. Admin acompanha pelo painel da
+     * diretoria; aqui ele só observa.
+     */
+    public static function canCreate(): bool
+    {
+        return auth()->user()?->isChurchPresident() ?? false;
+    }
+
+    public static function canEdit(Model $record): bool
+    {
+        return $record->isEditableByChurch() && (auth()->user()?->isChurchPresident() ?? false);
+    }
+
+    public static function canDelete(Model $record): bool
+    {
+        return false;
+    }
+
+    public static function canDeleteAny(): bool
+    {
+        return false;
     }
 }
