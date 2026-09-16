@@ -375,6 +375,19 @@ não repita a lógica de borda vermelha em cada formulário.
 - **`explode(',')` em lista com valor monetário** quebra no separador decimal.
 - **Migration com `down()` vazio** não dá rollback e quebra o re-run. Uma já foi corrigida
   por migration nova (editar a original não teria efeito: ela já rodou em produção).
+- **Sem região, o SDK da AWS nem constrói o cliente.** Falta `AWS_DEFAULT_REGION` e vem
+  "Missing required client configuration options: region" — e com `throw => false` isso
+  desaparecia: o upload simplesmente não acontecia, sem erro em tela. O disco já assume
+  `auto` (o valor do R2) por padrão; apontando para a AWS de verdade, defina a região.
+- **Endpoint do R2 com o bucket no fim quebra só a LISTAGEM.** O painel da Cloudflare mostra
+  o campo "S3 API" já com `/femopror-comprovantes` no final. Copiar assim parece funcionar —
+  gravar, ler e assinar link resolvem certo — mas `ListObjectsV2` concatena o bucket de novo
+  (`.../femopror-comprovantes/femopror-comprovantes/?list-type=2`) e devolve `NoSuchKey`.
+  Como listar só acontece em manutenção, apareceria no pior momento. `App\Support\R2Endpoint`
+  normaliza, então o `.env` tolera as duas formas.
+- **`exists()` no R2 lança exceção em arquivo ausente.** O `exists()` do Laravel também sonda
+  se o caminho é diretório, e essa sondagem levanta `UnableToCheckDirectoryExistence` no R2 —
+  justo no caso normal de conferir se o destino ainda não existe. Use **`fileExists()`**.
 - **Teste sem `Storage::fake` do disco CERTO grava no bucket de produção.** Com
   `UPLOADS_DISK=r2` no `.env`, um `Storage::fake('local')` não protege nada: o componente usa
   `config('femopror.uploads.disk')` e escreve no R2 de verdade. Já aconteceu — sobraram 7

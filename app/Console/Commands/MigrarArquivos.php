@@ -57,14 +57,21 @@ class MigrarArquivos extends Command
         $falhas = 0;
 
         foreach ($this->caminhos() as $caminho) {
-            if (! Storage::disk($origem)->exists($caminho)) {
+            /*
+             * `fileExists()` e não `exists()`: o `exists()` do Laravel também
+             * sonda se o caminho é um diretório, e no R2 essa sondagem lança
+             * `UnableToCheckDirectoryExistence` quando o objeto não existe —
+             * justamente o caso normal aqui, que é conferir o destino antes de
+             * copiar.
+             */
+            if (! Storage::disk($origem)->fileExists($caminho)) {
                 $this->line("  <fg=yellow>ausente na origem</> {$caminho}");
                 $faltando++;
 
                 continue;
             }
 
-            if (Storage::disk($destino)->exists($caminho)) {
+            if (Storage::disk($destino)->fileExists($caminho)) {
                 $this->line("  <fg=gray>já existe no destino</> {$caminho}");
 
                 continue;

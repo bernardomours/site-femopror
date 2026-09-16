@@ -63,11 +63,14 @@ return [
             'secret' => env('R2_SECRET_ACCESS_KEY'),
             'region' => 'auto',
             'bucket' => env('R2_BUCKET'),
-            'endpoint' => env('R2_ENDPOINT'),
+            // Tolera o endpoint copiado do painel com o bucket no fim — ver R2Endpoint.
+            'endpoint' => \App\Support\R2Endpoint::normalize(env('R2_ENDPOINT'), env('R2_BUCKET')),
             'use_path_style_endpoint' => true,
             'visibility' => 'private',
-            'throw' => true,
-            'report' => false,
+
+            // Mesma razão do disco `s3`: reportar sim, lançar não.
+            'throw' => false,
+            'report' => true,
 
             /*
              * Desde a versão 3.3xx o SDK da AWS manda `x-amz-checksum-crc32` em
@@ -83,17 +86,48 @@ return [
             'response_checksum_validation' => 'when_required',
         ],
 
+        /*
+         * Neste projeto o disco `s3` é usado para falar com o Cloudflare R2
+         * (que é S3-compatível), com as variáveis AWS_*. Ele tem os mesmos
+         * ajustes do disco `r2` acima — os dois caminhos funcionam, escolha
+         * pelo UPLOADS_DISK.
+         */
         's3' => [
             'driver' => 's3',
             'key' => env('AWS_ACCESS_KEY_ID'),
             'secret' => env('AWS_SECRET_ACCESS_KEY'),
-            'region' => env('AWS_DEFAULT_REGION'),
+
+            /*
+             * O padrão é `auto` (o valor que o R2 usa) porque sem região o SDK
+             * nem constrói o cliente: ele lança "Missing required client
+             * configuration options: region". Com `throw => false`, que era o
+             * padrão daqui, isso sumia em silêncio — o upload simplesmente não
+             * acontecia e nada aparecia na tela.
+             *
+             * Apontando para a AWS de verdade, defina AWS_DEFAULT_REGION
+             * (us-east-1, sa-east-1...): `auto` só vale no R2.
+             */
+            'region' => env('AWS_DEFAULT_REGION', 'auto'),
             'bucket' => env('AWS_BUCKET'),
             'url' => env('AWS_URL'),
-            'endpoint' => env('AWS_ENDPOINT'),
+            // Tolera o endpoint copiado do painel com o bucket no fim — ver R2Endpoint.
+            'endpoint' => \App\Support\R2Endpoint::normalize(env('AWS_ENDPOINT'), env('AWS_BUCKET')),
             'use_path_style_endpoint' => env('AWS_USE_PATH_STYLE_ENDPOINT', false),
+
+            /*
+             * Falha de upload vai para o log (report), mas NAO lança: com throw,
+             * um exists() em arquivo inexistente vira exceção e quebra leituras
+             * legítimas (o femopror:migrar-arquivos faz exatamente isso).
+             *
+             * Quem garante que a inscrição não é gravada sem comprovante é o
+             * próprio componente, que recusa quando o store() devolve false.
+             */
             'throw' => false,
-            'report' => false,
+            'report' => true,
+
+            // Ver a nota no disco `r2`: o checksum automático do SDK quebra no R2.
+            'request_checksum_calculation' => 'when_required',
+            'response_checksum_validation' => 'when_required',
         ],
 
     ],

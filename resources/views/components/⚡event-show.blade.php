@@ -177,10 +177,29 @@ new #[Layout('layouts.public')] class extends Component {
 
         RateLimiter::hit($chave, 300);
 
-        $caminhoComprovante = $this->receipt
-            // Disco privado: comprovante bancário não fica em endereço público.
-            ? $this->receipt->store('receipts', config('femopror.uploads.disk'))
-            : null;
+        $caminhoComprovante = null;
+
+        if ($this->receipt) {
+            try {
+                // Disco privado: comprovante bancário não fica em endereço público.
+                $caminhoComprovante = $this->receipt->store('receipts', config('femopror.uploads.disk'));
+            } catch (Throwable $e) {
+                report($e);
+                $caminhoComprovante = false;
+            }
+
+            /*
+             * Se o armazenamento falhou, a inscrição NÃO pode ser criada.
+             * Sem isto, o `store()` devolvia false, a inscrição era gravada com
+             * o comprovante vazio, e ninguém percebia: a pessoa via "inscrição
+             * enviada com sucesso" e a tesouraria abria um registro sem anexo.
+             */
+            if ($caminhoComprovante === false) {
+                $this->addError('receipt', 'Não conseguimos guardar seu comprovante agora. Tente de novo em instantes — sua inscrição ainda não foi registrada.');
+
+                return;
+            }
+        }
 
         try {
             $inscricao = Registration::create([

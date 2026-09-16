@@ -5,9 +5,9 @@
     </h1>
 
     <p style="margin:0 0 20px 0; font-size:15px; line-height:1.65; color:#374151;">
-        Oi, {{ explode(' ', $inscricao->name)[0] }}. Sua inscrição chegou aqui certinho.
+        Olá, {{ explode(' ', $inscricao->name)[0] }}. Sua inscrição chegou aqui certinho.
         @if((float) $inscricao->amount_paid > 0)
-            Agora a tesouraria vai conferir o comprovante do PIX — assim que confirmar, você
+            Agora a tesouraria vai conferir o comprovante do PIX, assim que confirmar, você
             recebe outro e-mail avisando.
         @else
             Sua vaga já está registrada.
