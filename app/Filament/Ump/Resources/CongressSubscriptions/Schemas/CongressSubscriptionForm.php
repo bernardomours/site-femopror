@@ -45,7 +45,8 @@ class CongressSubscriptionForm
 
                         FileUpload::make('receipt_path')
                             ->label('Comprovante de Pagamento (PIX)')
-                            ->image()
+                            // Aceita PDF: é como boa parte dos bancos compartilha.
+                            ->acceptedFileTypes(['image/jpeg', 'image/png', 'application/pdf'])
                             // Disco privado: comprovante bancário não pode ficar
                             // acessível por URL direta sem autenticação.
                             ->disk(config('femopror.uploads.disk'))

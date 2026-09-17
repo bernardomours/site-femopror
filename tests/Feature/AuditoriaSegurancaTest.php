@@ -295,10 +295,18 @@ class AuditoriaSegurancaTest extends TestCase
         sort($publicas);
 
         $this->assertSame(
-            ['church_id', 'editando', 'email', 'eventId', 'isVisitor', 'name', 'phone', 'receipt', 'respostas'],
+            [
+                'church_id', 'editando', 'email', 'eventId', 'isVisitor', 'name',
+                'phone', 'receipt', 'respostas', 'substituindoComprovante',
+            ],
             $publicas,
             'apareceu propriedade pública nova no componente: confira se ela pode ser adulterada pelo navegador',
         );
+
+        // `editando` e `substituindoComprovante` são interruptores de tela: o
+        // navegador pode ligá-los à vontade, porque quem decide se a operação
+        // vale são `salvarDados()`, `trocarComprovante()` e `enviarComprovante()`,
+        // que reconsultam a inscrição do usuário autenticado a cada chamada.
     }
 
     public function test_evento_id_e_travado_contra_adulteracao(): void

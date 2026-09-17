@@ -5,6 +5,8 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Support\Facades\Storage;
+use Throwable;
 
 class Registration extends Model
 {
@@ -128,5 +130,47 @@ class Registration extends Model
     public function isAwaitingReceipt(): bool
     {
         return $this->statusKey() === 'aguardando_comprovante';
+    }
+
+    /**
+     * Mandou o arquivo errado? Dá para trocar enquanto a tesouraria não
+     * confirmou o pagamento — até ali nada foi conciliado, então substituir não
+     * desfaz nada. Depois de confirmado, o valor já foi conferido contra aquele
+     * comprovante, e trocar apagaria a prova do que foi aprovado.
+     */
+    public function canReplaceReceipt(): bool
+    {
+        return $this->payment_status === 'pending' && filled($this->receipt_path);
+    }
+
+    public function receiptIsPdf(): bool
+    {
+        return str_ends_with(mb_strtolower((string) $this->receipt_path), '.pdf');
+    }
+
+    /**
+     * Link temporário para o próprio participante conferir o que enviou.
+     *
+     * O comprovante mora em disco privado: sem isto, quem mandou o arquivo
+     * errado não tinha como sequer descobrir qual arquivo estava lá — só a
+     * tesouraria enxergava.
+     *
+     * Devolve null em vez de estourar: problema de disco não pode derrubar o
+     * painel de quem só queria ver a inscrição.
+     */
+    public function receiptUrl(int $minutos = 30): ?string
+    {
+        if (blank($this->receipt_path)) {
+            return null;
+        }
+
+        try {
+            return Storage::disk(config('femopror.uploads.disk'))
+                ->temporaryUrl($this->receipt_path, now()->addMinutes($minutos));
+        } catch (Throwable $e) {
+            report($e);
+
+            return null;
+        }
     }
 }

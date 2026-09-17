@@ -48,6 +48,9 @@ new #[Layout('layouts.public')] class extends Component {
     /** Voltou da etapa de pagamento para alterar os dados. */
     public bool $editando = false;
 
+    /** Está trocando um comprovante que já havia sido enviado. */
+    public bool $substituindoComprovante = false;
+
     /** Respostas indexadas pela chave estável do campo (ver Event::customFieldDefinitions). */
     public array $respostas = [];
 
@@ -250,29 +253,39 @@ new #[Layout('layouts.public')] class extends Component {
         }
     }
 
-    /** Etapa 2 → anexa o comprovante à inscrição já salva. */
+    /**
+     * Etapa 2 → anexa o comprovante à inscrição já salva, ou substitui o que
+     * já está lá.
+     *
+     * Trocar vale enquanto a tesouraria não confirmou o pagamento: quem mandou
+     * o print errado precisava falar com a diretoria, porque a tela não dava
+     * nenhum caminho de volta.
+     */
     public function enviarComprovante(): void
     {
         abort_unless(auth()->check(), 403);
 
         $inscricao = $this->inscricao;
 
-        // Só a própria inscrição, e só enquanto espera comprovante. De propósito
-        // NÃO exige inscrições abertas: quem salvou antes de fecharem ainda
-        // precisa conseguir pagar.
-        abort_unless($inscricao && $inscricao->isAwaitingReceipt(), 403);
+        // Só a própria inscrição. De propósito NÃO exige inscrições abertas:
+        // quem salvou antes de fecharem ainda precisa conseguir pagar.
+        abort_unless(
+            $inscricao && ($inscricao->isAwaitingReceipt() || $inscricao->canReplaceReceipt()),
+            403,
+        );
 
         if ($this->limiteEstourado('receipt')) {
             return;
         }
 
         $this->validate([
-            'receipt' => ['required', 'image', 'max:'.UploadLimit::maxKilobytes()],
+            'receipt' => ['required', 'file', 'mimes:jpg,jpeg,png,pdf', 'max:'.UploadLimit::maxKilobytes()],
         ], $this->mensagens());
 
         RateLimiter::hit($this->chaveDoLimite(), 300);
 
         $disco = config('femopror.uploads.disk');
+        $antigo = $inscricao->receipt_path;
 
         try {
             // Disco privado: comprovante bancário não fica em endereço público.
@@ -290,28 +303,64 @@ new #[Layout('layouts.public')] class extends Component {
             return;
         }
 
-        // Só grava se ainda estiver sem comprovante: duas abas enviando juntas
-        // não podem deixar um arquivo sobrescrever o outro.
+        /*
+         * A gravação confirma o estado que a tela viu: ainda pendente e com o
+         * mesmo arquivo de antes. Duas abas enviando ao mesmo tempo, ou uma
+         * troca depois de a tesouraria já ter confirmado, param aqui.
+         */
         $gravou = Registration::whereKey($inscricao->getKey())
-            ->whereNull('receipt_path')
+            ->where('payment_status', 'pending')
+            ->where(fn ($q) => blank($antigo) ? $q->whereNull('receipt_path') : $q->where('receipt_path', $antigo))
             ->update(['receipt_path' => $caminho]);
 
         if ($gravou === 0) {
             Storage::disk($disco)->delete($caminho);
+            $this->reset('receipt', 'substituindoComprovante');
             unset($this->inscricao);
 
             return;
         }
 
+        // O arquivo trocado sai do armazenamento: documento bancário sem dono
+        // ocupando espaço pago não serve para nada.
+        if (filled($antigo)) {
+            Storage::disk($disco)->delete($antigo);
+        }
+
         $inscricao->refresh()->load(['event', 'church']);
 
-        SafeMail::send($inscricao->email, new InscricaoRecebida($inscricao));
+        if (blank($antigo)) {
+            SafeMail::send($inscricao->email, new InscricaoRecebida($inscricao));
 
-        session()->flash('success_titulo', 'Inscrição enviada!');
-        session()->flash('success', 'Recebemos seu comprovante. Mandamos um e-mail para '.$inscricao->email.' com o resumo, e outro chega assim que a tesouraria confirmar o pagamento.');
+            session()->flash('success_titulo', 'Inscrição enviada!');
+            session()->flash('success', 'Recebemos seu comprovante. Mandamos um e-mail para '.$inscricao->email.' com o resumo, e outro chega assim que a tesouraria confirmar o pagamento.');
+        } else {
+            // Trocar arquivo não é inscrição nova: e-mail de novo só seria ruído.
+            session()->flash('comprovante_trocado', 'Comprovante substituído. A tesouraria vai conferir o novo arquivo.');
+        }
+
+        $this->reset('receipt', 'substituindoComprovante');
+        unset($this->inscricao);
+    }
+
+    /** Abre o campo de upload em cima de um comprovante já enviado. */
+    public function trocarComprovante(): void
+    {
+        abort_unless(auth()->check(), 403);
+
+        $inscricao = $this->inscricao;
+
+        abort_unless($inscricao && $inscricao->canReplaceReceipt(), 403);
 
         $this->reset('receipt');
-        unset($this->inscricao);
+        $this->resetErrorBag();
+        $this->substituindoComprovante = true;
+    }
+
+    public function cancelarTrocaComprovante(): void
+    {
+        $this->reset('receipt', 'substituindoComprovante');
+        $this->resetErrorBag();
     }
 
     /** Da etapa 2 de volta para a 1, para trocar modalidade ou corrigir dados. */
@@ -432,7 +481,8 @@ new #[Layout('layouts.public')] class extends Component {
             'church_id.required' => 'Selecione a sua igreja local.',
             'church_id.exists' => 'Selecione uma igreja da lista.',
             'receipt.required' => 'Anexe o comprovante do PIX para finalizar.',
-            'receipt.image' => 'O comprovante precisa ser uma imagem (PNG ou JPG).',
+            // Vários bancos compartilham o comprovante como PDF, não como imagem.
+            'receipt.mimes' => 'O comprovante precisa ser uma imagem (PNG ou JPG) ou um PDF.',
             'receipt.max' => 'A imagem do comprovante passa de '.UploadLimit::label().'. Tire um print menor ou reduza a foto.',
         ];
 
@@ -642,8 +692,9 @@ new #[Layout('layouts.public')] class extends Component {
                                     <label class="block cursor-pointer">
                                         <svg class="mx-auto mb-2 h-8 w-8 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v1m-4-8l-4-4m0 0L8 8m4-4v12"></path></svg>
                                         <span class="block text-xs font-semibold text-green-900">Anexar comprovante do PIX</span>
-                                        <span class="text-[10px] text-gray-400">PNG ou JPG, até {{ UploadLimit::label() }}</span>
-                                        <input type="file" wire:model="receipt" @change="conferir($event)" class="sr-only" accept="image/png,image/jpeg">
+                                        <span class="text-[10px] text-gray-400">PNG, JPG ou PDF, até {{ UploadLimit::label() }}</span>
+                                        {{-- Banco costuma compartilhar o comprovante em PDF. --}}
+                                        <input type="file" wire:model="receipt" @change="conferir($event)" class="sr-only" accept="image/png,image/jpeg,application/pdf">
                                     </label>
 
                                     <div x-show="grande" x-cloak class="mt-2 text-xs font-medium text-red-600">
@@ -654,7 +705,7 @@ new #[Layout('layouts.public')] class extends Component {
                                     @if ($receipt)
                                         <div x-show="! grande" class="mt-2 flex items-center justify-center gap-1 text-xs font-bold text-green-700">
                                             <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>
-                                            Imagem carregada!
+                                            Arquivo carregado!
                                         </div>
                                     @endif
 
@@ -706,7 +757,7 @@ new #[Layout('layouts.public')] class extends Component {
                                 @switch($status)
                                     @case('pago') Pagamento confirmado pela tesouraria. Te esperamos lá! @break
                                     @case('gratuita') Sua inscrição está confirmada. Te esperamos lá! @break
-                                    @case('em_analise') Recebemos seu comprovante. A tesouraria está conferindo — você recebe um e-mail quando o pagamento for confirmado. @break
+                                    @case('em_analise') Recebemos seu comprovante. A diretoria está verificando se sua inscrição está totalmente válida, você receberá um e-mail quando o pagamento for confirmado. @break
                                     @case('aguardando_pagamento') Sua inscrição está salva. Assim que o PIX cair, a tesouraria confirma o pagamento. @break
                                     @case('cancelada') Esta inscrição foi cancelada. Em caso de dúvida, fale com a diretoria. @break
                                 @endswitch
@@ -727,6 +778,106 @@ new #[Layout('layouts.public')] class extends Component {
                                             <span x-text="copiado ? 'COPIADO!' : 'COPIAR'">COPIAR</span>
                                         </button>
                                     </div>
+                                </div>
+                            @endif
+
+                            {{-- O comprovante mora em disco privado: sem este bloco a pessoa
+                                 não tinha como nem ver qual arquivo tinha mandado, quanto mais
+                                 corrigir um print errado. --}}
+                            @if(filled($inscricao->receipt_path))
+                                @php($urlComprovante = $inscricao->receiptUrl())
+
+                                <div class="mb-6 rounded-xl border border-gray-200 p-4 text-left">
+                                    <p class="mb-3 text-xs font-bold uppercase tracking-wider text-gray-400">Comprovante enviado</p>
+
+                                    @if(session('comprovante_trocado'))
+                                        <p class="mb-3 rounded-lg bg-green-50 px-3 py-2 text-xs font-medium text-green-800">
+                                            {{ session('comprovante_trocado') }}
+                                        </p>
+                                    @endif
+
+                                    <div class="flex items-center gap-3">
+                                        <div class="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg bg-gray-100 text-gray-500">
+                                            <svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+                                                @if($inscricao->receiptIsPdf())
+                                                    <path stroke-linecap="round" stroke-linejoin="round" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
+                                                @else
+                                                    <path stroke-linecap="round" stroke-linejoin="round" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                                                @endif
+                                            </svg>
+                                        </div>
+
+                                        <div class="min-w-0 flex-grow text-sm">
+                                            <p class="font-medium text-gray-900">{{ $inscricao->receiptIsPdf() ? 'Documento PDF' : 'Imagem' }}</p>
+                                            <p class="text-xs text-gray-500">Enviado em {{ $inscricao->updated_at->format('d/m/Y \à\s H:i') }}</p>
+                                        </div>
+
+                                        @if($urlComprovante)
+                                            {{-- Link assinado, válido por 30 minutos. --}}
+                                            <a href="{{ $urlComprovante }}" target="_blank" rel="noopener noreferrer"
+                                               class="flex-shrink-0 rounded-lg border border-gray-200 px-3 py-2 text-xs font-semibold text-gray-700 transition-colors hover:bg-gray-50">
+                                                Ver
+                                            </a>
+                                        @endif
+                                    </div>
+
+                                    @if($inscricao->canReplaceReceipt())
+                                        @if(! $substituindoComprovante)
+                                            <button type="button" wire:click="trocarComprovante"
+                                                    class="mt-3 text-xs font-semibold text-green-900 underline underline-offset-2 hover:text-green-700">
+                                                Mandei o arquivo errado, trocar comprovante
+                                            </button>
+                                        @else
+                                            <form wire:submit.prevent="enviarComprovante" class="mt-4 space-y-3">
+                                                <div x-data="{
+                                                        maxBytes: {{ UploadLimit::maxBytes() }},
+                                                        grande: false,
+                                                        conferir(evento) {
+                                                            const arquivo = evento.target.files[0]
+                                                            this.grande = !! arquivo && arquivo.size > this.maxBytes
+                                                            if (this.grande) evento.target.value = ''
+                                                        }
+                                                     }"
+                                                     class="rounded-xl border-2 border-dashed bg-gray-50 p-4 text-center"
+                                                     :class="grande ? 'border-red-300' : '@error('receipt') border-red-300 @else border-gray-200 @enderror'">
+                                                    <label class="block cursor-pointer">
+                                                        <span class="block text-xs font-semibold text-green-900">Escolher o arquivo certo</span>
+                                                        <span class="text-[10px] text-gray-400">PNG, JPG ou PDF, até {{ UploadLimit::label() }}</span>
+                                                        <input type="file" wire:model="receipt" @change="conferir($event)" class="sr-only" accept="image/png,image/jpeg,application/pdf">
+                                                    </label>
+
+                                                    <div x-show="grande" x-cloak class="mt-2 text-xs font-medium text-red-600">
+                                                        Esse arquivo passa de {{ UploadLimit::label() }}.
+                                                    </div>
+
+                                                    @if ($receipt)
+                                                        <div x-show="! grande" class="mt-2 text-xs font-bold text-green-700">Arquivo carregado!</div>
+                                                    @endif
+
+                                                    <div wire:loading wire:target="receipt" class="mt-2 text-xs font-semibold text-gray-500">Enviando arquivo...</div>
+                                                    @error('receipt') <span class="mt-1 block text-left text-xs font-medium text-red-600">{{ $message }}</span> @enderror
+                                                </div>
+
+                                                <div class="flex gap-2">
+                                                    <button type="submit" wire:loading.attr="disabled" wire:target="enviarComprovante,receipt"
+                                                            class="flex-grow rounded-xl bg-green-900 py-2.5 text-sm font-bold text-white transition hover:bg-green-800 disabled:opacity-50">
+                                                        <span wire:loading.remove wire:target="enviarComprovante">Substituir comprovante</span>
+                                                        <span wire:loading wire:target="enviarComprovante">Enviando...</span>
+                                                    </button>
+
+                                                    <button type="button" wire:click="cancelarTrocaComprovante"
+                                                            class="rounded-xl border border-gray-200 px-4 py-2.5 text-sm font-semibold text-gray-600 transition hover:bg-gray-50">
+                                                        Cancelar
+                                                    </button>
+                                                </div>
+                                            </form>
+                                        @endif
+                                    @elseif($inscricao->isPaid())
+                                        <p class="mt-3 text-xs leading-relaxed text-gray-400">
+                                            O pagamento já foi confirmado pela tesouraria, então o comprovante
+                                            não pode mais ser trocado. Se houver algo errado, fale com a diretoria.
+                                        </p>
+                                    @endif
                                 </div>
                             @endif
 

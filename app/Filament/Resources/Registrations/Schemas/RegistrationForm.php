@@ -68,7 +68,9 @@ class RegistrationForm
                         ->disk(config('femopror.uploads.disk'))
                         ->visibility('private')
                         ->directory('receipts')
-                        ->image()
+                        // `->image()` recusava PDF, e vários bancos compartilham
+                        // o comprovante justamente em PDF.
+                        ->acceptedFileTypes(['image/jpeg', 'image/png', 'application/pdf'])
                         ->openable()
                         ->downloadable(),
                         

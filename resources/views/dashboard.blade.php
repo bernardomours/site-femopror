@@ -67,6 +67,13 @@
                                    class="inline-flex items-center rounded-lg bg-green-900 px-3.5 py-2 text-sm font-semibold text-white transition-colors hover:bg-green-800">
                                     Pagar e enviar comprovante
                                 </a>
+                            @elseif($inscricao->canReplaceReceipt())
+                                {{-- Mandou o arquivo errado: dá para trocar enquanto a tesouraria
+                                     não confirmou. --}}
+                                <a href="{{ route('events.show', $inscricao->event_id) }}"
+                                   class="inline-flex items-center rounded-lg border border-gray-200 px-3.5 py-2 text-sm font-semibold text-gray-700 transition-colors hover:bg-gray-50">
+                                    Visualizar comprovante
+                                </a>
                             @endif
 
                             <button type="button" @click="showDetails = ! showDetails" :aria-expanded="showDetails"
@@ -99,6 +106,25 @@
                                     <dd class="text-sm text-gray-900">{{ $valor }}</dd>
                                 </div>
                             @endforeach
+
+                            {{-- O comprovante está em disco privado: sem este link a pessoa
+                                 não conseguia nem conferir qual arquivo tinha mandado. --}}
+                            @if(filled($inscricao->receipt_path))
+                                @php($urlComprovante = $inscricao->receiptUrl())
+                                <div>
+                                    <dt class="mb-0.5 text-xs font-medium text-gray-500">Comprovante</dt>
+                                    <dd class="text-sm text-gray-900">
+                                        @if($urlComprovante)
+                                            <a href="{{ $urlComprovante }}" target="_blank" rel="noopener noreferrer"
+                                               class="inline-flex items-center gap-1 font-medium text-green-900 underline underline-offset-2 hover:text-green-700">
+                                                Ver {{ $inscricao->receiptIsPdf() ? 'PDF' : 'imagem' }} enviado
+                                            </a>
+                                        @else
+                                            <span class="text-gray-400">Indisponível no momento</span>
+                                        @endif
+                                    </dd>
+                                </div>
+                            @endif
 
                             @if(is_array($inscricao->custom_answers))
                                 @foreach($inscricao->custom_answers as $pergunta => $resposta)

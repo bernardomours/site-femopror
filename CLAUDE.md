@@ -217,6 +217,21 @@ pagamento para alterar os dados.
 - **"Alterar dados" só existe enquanto não há comprovante** (`Registration::isAwaitingReceipt()`).
   Depois dele, mudar a modalidade mudaria o valor de um PIX já pago. A trava está nos
   métodos, não só no botão.
+- **O comprovante pode ser TROCADO enquanto a tesouraria não confirma**
+  (`Registration::canReplaceReceipt()`, ou seja, `pending` + já tem arquivo). Quem mandou o
+  print errado precisava falar com a diretoria. Trocar apaga o arquivo antigo do
+  armazenamento e **não reenvia o e-mail** — seria ruído, não é inscrição nova. Depois de
+  confirmado não dá mais: o valor já foi conferido contra aquele arquivo.
+- **A gravação do comprovante confirma o estado que a tela viu** (`pending` + mesmo arquivo de
+  antes). Duas abas enviando juntas, ou uma troca disparada depois de a tesouraria já ter
+  confirmado, param aí e o arquivo recém-enviado é descartado.
+- **Comprovante aceita PNG, JPG e PDF.** A regra era `image`, e vários bancos compartilham o
+  comprovante em PDF — quem só tinha o PDF não conseguia concluir a inscrição. Vale nos três
+  lugares: página do evento, painel da diretoria e painel da UMP.
+- **O participante vê o próprio comprovante** por `Registration::receiptUrl()`, um link
+  assinado de 30 minutos, na página do evento e em "Minhas inscrições". Como o arquivo mora em
+  disco privado, antes só a tesouraria enxergava — a pessoa não tinha como nem conferir qual
+  arquivo tinha mandado.
 - **Enviar o comprovante NÃO exige inscrições abertas.** Quem salvou antes de fecharem ainda
   precisa conseguir pagar.
 - **Nada a pagar, uma etapa só:** com total zero, `salvarDados()` já conclui e manda o e-mail.
@@ -393,6 +408,7 @@ congresso.
 | `PainelParticipanteTest` | dashboard de delegado (regressão do 500), vínculo sobrevivendo à troca de e-mail, delegação amarrada no cadastro, isolamento entre participantes |
 | `PaginaInicialTest` | home responde, rascunho escondido, ícone inválido não derruba a página, diretoria ativa, ordenação das igrejas, meta de compartilhamento |
 | `PerfilTest` | igreja e telefone gravados e normalizados, opcionais, validação, prefill da inscrição, perfil completado sem sobrescrever |
+| `TrocaDeComprovanteTest` | PDF aceito e tipo proibido recusado, participante abrindo o próprio comprovante, troca substituindo e apagando o arquivo antigo, sem reenviar e-mail e sem mexer no valor, troca barrada depois da confirmação (inclusive quando a confirmação acontece no meio) e na inscrição de outra pessoa |
 | `AuditoriaSegurancaTest` | as quatro frentes: tetos de requisição (e a checagem de que as rotas sensíveis declaram `throttle`), payload de SQL sobrevivendo como texto, cada área restrita recusando usuário comum e visitante, arquivo privado só com assinatura válida, HTML sem dados de outro participante, e o inventário de propriedades públicas do componente de inscrição |
 | `FluxoInscricaoCopaTest` | o caminho inteiro de um evento avulso: os dois botões para quem está deslogado, criar conta e voltar para o evento, entrar e voltar, alternar sem perder o destino, open redirect recusado, esportes somando no valor, QR cobrando o valor salvo e acompanhando a alteração, comprovante no disco privado, e-mail só depois do comprovante, falha de SMTP não derrubando a inscrição |
 | `PixPayloadTest` | estrutura do BR Code, valor, normalização de acento/tamanho, CRC |
