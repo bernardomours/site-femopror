@@ -12,6 +12,7 @@ use Filament\Notifications\Notification;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Enums\FiltersLayout;
 use Filament\Tables\Filters\SelectFilter;
+use Filament\Tables\Filters\TernaryFilter;
 use Filament\Tables\Table;
 use Illuminate\Support\Facades\Storage;
 
@@ -47,22 +48,13 @@ class RegistrationsTable
                     ->description('cobrado na inscrição'),
 
                 TextColumn::make('payment_status')
-                    ->label('Pagamento')
+                    ->label('Situação')
                     ->badge()
-                    // O match não tinha `default`: um status fora dos três
-                    // derrubava a tabela inteira com UnhandledMatchError.
-                    ->color(fn (?string $state): string => match ($state) {
-                        'pending' => 'warning',
-                        'paid' => 'success',
-                        'failed' => 'danger',
-                        default => 'gray',
-                    })
-                    ->formatStateUsing(fn (?string $state): string => match ($state) {
-                        'pending' => 'Pendente',
-                        'paid' => 'Pago',
-                        'failed' => 'Cancelado',
-                        default => (string) $state,
-                    }),
+                    // "Pendente" sozinho deixou de dizer muito: a inscrição agora é
+                    // salva antes do pagamento. A tesouraria precisa separar quem
+                    // ainda nem pagou de quem mandou comprovante para conferir.
+                    ->formatStateUsing(fn ($state, $record): string => $record->statusLabel())
+                    ->color(fn ($state, $record): string => $record->statusColor()),
 
                 TextColumn::make('created_at')
                     ->label('Inscrito em')
@@ -82,6 +74,17 @@ class RegistrationsTable
                         'failed' => 'Cancelado',
                     ])
                     ->label('Filtrar por Status'),
+
+                // O filtro que a tesouraria usa no dia a dia: "o que tem para conferir?"
+                TernaryFilter::make('receipt_path')
+                    ->label('Comprovante')
+                    ->placeholder('Todos')
+                    ->trueLabel('Com comprovante')
+                    ->falseLabel('Sem comprovante')
+                    ->queries(
+                        true: fn ($query) => $query->whereNotNull('receipt_path'),
+                        false: fn ($query) => $query->whereNull('receipt_path'),
+                    ),
             ], layout: FiltersLayout::AboveContent)
             ->recordActions([
                 Action::make('ver_comprovante')
@@ -101,9 +104,14 @@ class RegistrationsTable
                     ->color('success')
                     ->requiresConfirmation()
                     ->modalHeading('Confirmar Recebimento do PIX')
-                    ->modalDescription(fn ($record) => $record->amount_paid
-                        ? 'O sistema cobrou R$ '.number_format((float) $record->amount_paid, 2, ',', '.').' desta pessoa. Confira se o valor bate com o comprovante.'
-                        : 'Tem certeza de que o valor já consta na conta da federação?')
+                    ->modalDescription(fn ($record) => collect([
+                        $record->amount_paid
+                            ? 'O sistema cobrou R$ '.number_format((float) $record->amount_paid, 2, ',', '.').' desta pessoa. Confira se o valor bate com o comprovante.'
+                            : 'Tem certeza de que o valor já consta na conta da federação?',
+                        blank($record->receipt_path)
+                            ? 'Atenção: esta inscrição ainda NÃO tem comprovante anexado. Confirme só se o PIX já aparece no extrato.'
+                            : null,
+                    ])->filter()->implode(' '))
                     ->modalSubmitActionLabel('Sim, valor recebido')
                     ->visible(fn ($record) => $record->payment_status === 'pending')
                     ->action(function ($record) {

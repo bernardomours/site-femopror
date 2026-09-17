@@ -49,13 +49,25 @@
                         </div>
 
                         <div class="flex flex-col items-start gap-3 sm:flex-shrink-0 sm:items-end">
+                            @php($cor = $inscricao->statusColor())
                             <span @class([
                                 'inline-block rounded-lg px-3 py-1 text-xs font-semibold',
-                                'bg-green-50 text-green-800' => $inscricao->isPaid(),
-                                'bg-amber-50 text-amber-800' => ! $inscricao->isPaid(),
+                                'bg-green-50 text-green-800' => $cor === 'success',
+                                'bg-blue-50 text-blue-800' => $cor === 'info',
+                                'bg-amber-50 text-amber-800' => $cor === 'warning',
+                                'bg-red-50 text-red-700' => $cor === 'danger',
                             ])>
-                                {{ $inscricao->isPaid() ? 'Pagamento confirmado' : 'Em análise' }}
+                                {{ $inscricao->statusLabel() }}
                             </span>
+
+                            {{-- A inscrição é salva antes do pagamento. Quem fechou a aba no meio
+                                 (o app do banco costuma fazer isso no celular) retoma por aqui. --}}
+                            @if($inscricao->isAwaitingReceipt())
+                                <a href="{{ route('events.show', $inscricao->event_id) }}"
+                                   class="inline-flex items-center rounded-lg bg-green-900 px-3.5 py-2 text-sm font-semibold text-white transition-colors hover:bg-green-800">
+                                    Pagar e enviar comprovante
+                                </a>
+                            @endif
 
                             <button type="button" @click="showDetails = ! showDetails" :aria-expanded="showDetails"
                                     class="flex items-center gap-1 text-sm font-medium text-gray-500 transition-colors hover:text-green-900">

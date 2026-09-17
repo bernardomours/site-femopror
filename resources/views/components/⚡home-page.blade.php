@@ -40,7 +40,7 @@ new #[Layout('layouts.public')] class extends Component
 
 <div class="min-h-screen bg-gray-50">
 
-    <!-- navbar -->
+    {{-- navbar --}}
     {{-- Eram quatro links mais o botão de login num `flex gap-8` sem nenhum
          breakpoint: no celular a barra espremia e estourava a largura. Agora os
          links somem no mobile e viram um menu sanfona. --}}
@@ -176,7 +176,7 @@ new #[Layout('layouts.public')] class extends Component
 
     <main id="conteudo">
 
-    <!-- section do tema anual e botoes -->
+    {{-- section do tema anual e botoes --}}
     <div class="w-full bg-green-900 flex flex-col items-center justify-center py-6 md:py-8 px-4 border-b-8 border-green-950">
 
         <div class="w-full max-w-2xl mb-5 flex justify-center">
@@ -198,7 +198,7 @@ new #[Layout('layouts.public')] class extends Component
 
     </div>
 
-    <!-- section sobre nos -->
+    {{-- section sobre nos --}}
     <div id="historia" class="py-16 md:py-20 px-6 md:px-12 max-w-7xl mx-auto bg-white mb-10">
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-12 items-center">
 
@@ -253,7 +253,7 @@ new #[Layout('layouts.public')] class extends Component
         </div>
     </div>
 
-    <!-- section diretoria -->
+    {{-- section diretoria --}}
     <div id="diretoria" class="py-16 md:py-20 px-6 md:px-12 max-w-7xl mx-auto bg-white">
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-12 items-center">
 
@@ -312,7 +312,7 @@ new #[Layout('layouts.public')] class extends Component
         </div>
     </div>
 
-    <!-- section Quem compõe a FEMOPROR? -->
+    {{-- section Quem compõe a FEMOPROR? --}}
     <div class="py-16 px-6 md:px-12 max-w-7xl mx-auto">
         <div class="text-center mb-12">
             <h2 class="text-3xl font-bold text-gray-900 uppercase tracking-tight mb-2">Quem compõe a FEMOPROR?</h2>
@@ -435,7 +435,7 @@ new #[Layout('layouts.public')] class extends Component
         </div>
     </div>
 
-    <!-- section de eventos -->
+    {{-- section de eventos --}}
     <div id="eventos" class="py-16 md:py-20 px-6 md:px-12 max-w-7xl mx-auto">
         <div class="text-center mb-12">
             <h2 class="text-3xl font-bold text-gray-800">O que vem por aí?</h2>
@@ -518,7 +518,7 @@ new #[Layout('layouts.public')] class extends Component
         @endif
     </div>
 
-    <!-- section de downloads -->
+    {{-- section de downloads --}}
     <div id="downloads" class="py-16 md:py-20 px-6 md:px-12 max-w-7xl mx-auto bg-gray-50 border-t border-gray-200 mt-12">
         <div class="text-center mb-12">
             <h2 class="text-3xl font-bold text-gray-800">Materiais e Downloads</h2>
@@ -559,7 +559,7 @@ new #[Layout('layouts.public')] class extends Component
 
     </main>
 
-    <!-- rodapé -->
+    {{-- rodapé --}}
     <footer class="bg-gray-100 pt-16 pb-8 border-t border-gray-200 mt-20">
         <div class="max-w-7xl mx-auto px-6 md:px-12">
 

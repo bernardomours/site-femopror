@@ -6,8 +6,10 @@ use App\Models\Event;
 use App\Models\Registration;
 use App\Support\PixPayload;
 use App\Support\SafeMail;
+use App\Support\UploadLimit;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Facades\RateLimiter;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\Rule;
 use Livewire\Attributes\Computed;
 use Livewire\Attributes\Layout;
@@ -15,6 +17,21 @@ use Livewire\Attributes\Locked;
 use Livewire\Component;
 use Livewire\WithFileUploads;
 
+/*
+ * A inscrição acontece em duas etapas:
+ *
+ *   ① Seus dados   → valida e SALVA a inscrição, com o valor congelado
+ *   ② Pagamento    → mostra o PIX desse valor e recebe o comprovante
+ *
+ * A inscrição é salva ANTES do pagamento de propósito. Pagar pelo celular é
+ * sair do navegador e abrir o app do banco — e o navegador muitas vezes
+ * descarta a aba que ficou para trás. Se nada estivesse salvo, a pessoa pagava,
+ * voltava para um formulário vazio, e a tesouraria recebia um PIX sem inscrição.
+ *
+ * Por isso a tela não guarda "em que etapa estou" numa propriedade: ela
+ * pergunta ao banco. Tem inscrição esperando comprovante? Etapa 2. Reabrir a
+ * página, trocar de aparelho ou voltar pelo e-mail cai no lugar certo sozinho.
+ */
 new #[Layout('layouts.public')] class extends Component {
     use WithFileUploads;
 
@@ -28,34 +45,42 @@ new #[Layout('layouts.public')] class extends Component {
     public $receipt;
     public bool $isVisitor = false;
 
+    /** Voltou da etapa de pagamento para alterar os dados. */
+    public bool $editando = false;
+
     /** Respostas indexadas pela chave estável do campo (ver Event::customFieldDefinitions). */
     public array $respostas = [];
-
-    public bool $mostrarPix = false;
-    public string $pixCopiaCola = '';
 
     public function mount($id): void
     {
         $evento = Event::findOrFail($id);
 
         // Rascunho é evento oculto: não deve nem existir para quem está de fora.
-        // Antes, `/eventos/3` abria e aceitava inscrição em qualquer status.
         abort_if($evento->status === 'draft', 404);
 
         $this->eventId = $evento->id;
 
-        // Nome, e-mail, igreja e WhatsApp já vêm da conta: são os mesmos dados
-        // em toda inscrição, e ficam guardados em /profile.
-        if ($user = auth()->user()) {
-            $this->name = $user->name;
-            $this->email = $user->email;
-            $this->church_id = $user->church_id ?? '';
-            $this->phone = $user->phone ?? '';
-        }
-
         foreach ($evento->customFieldDefinitions() as $campo) {
             $this->respostas[$campo['key']] = $campo['type'] === 'checkbox' ? [] : '';
         }
+
+        if (! $user = auth()->user()) {
+            return;
+        }
+
+        $inscricao = Registration::where('user_id', $user->id)->where('event_id', $evento->id)->first();
+
+        if ($inscricao) {
+            $this->preencherComInscricao($inscricao);
+
+            return;
+        }
+
+        // Sem inscrição ainda: nome, e-mail, igreja e WhatsApp vêm da conta.
+        $this->name = $user->name;
+        $this->email = $user->email;
+        $this->church_id = $user->church_id ?? '';
+        $this->phone = $user->phone ?? '';
     }
 
     #[Computed]
@@ -70,22 +95,29 @@ new #[Layout('layouts.public')] class extends Component {
         return $this->event->customFieldDefinitions();
     }
 
+    /**
+     * A inscrição desta pessoa neste evento. Sempre pelo usuário autenticado —
+     * nenhum id vem do navegador, então não há como mexer na inscrição alheia.
+     */
     #[Computed]
-    public function jaInscrito(): bool
+    public function inscricao(): ?Registration
     {
-        return auth()->check() && Registration::where('user_id', auth()->id())
+        if (! auth()->check()) {
+            return null;
+        }
+
+        return Registration::with(['event', 'church'])
+            ->where('user_id', auth()->id())
             ->where('event_id', $this->eventId)
-            ->exists();
+            ->first();
     }
 
     /**
-     * O total sai SEMPRE das opções cadastradas no evento, casando o rótulo
-     * escolhido com o acréscimo correspondente.
+     * O total da etapa 1, recalculado enquanto a pessoa escolhe.
      *
-     * Antes o acréscimo era extraído por regex da string que o navegador
-     * devolvia: como `custom_answers` é propriedade pública, dava para mandar
-     * qualquer texto e forjar um valor menor, gerar o PIX com esse valor e
-     * pagar a menos.
+     * Sai SEMPRE das opções cadastradas no evento, casando o rótulo escolhido
+     * com o acréscimo correspondente. Antes o acréscimo era extraído por regex
+     * da string que o navegador devolvia: dava para forjar um valor menor.
      */
     #[Computed]
     public function precoFinal(): float
@@ -111,6 +143,22 @@ new #[Layout('layouts.public')] class extends Component {
         return round($total, 2);
     }
 
+    /**
+     * O PIX sai do valor SALVO na inscrição, nunca do que está na tela.
+     *
+     * Na versão anterior o QR ficava ao lado do formulário e podia ser gerado a
+     * qualquer momento: a pessoa gerava o de R$ 55, marcava mais uma modalidade,
+     * e o QR continuava cobrando 55. Aqui não há como envelhecer — mudar a
+     * escolha exige voltar à etapa 1 e salvar de novo.
+     */
+    #[Computed]
+    public function pixCopiaCola(): string
+    {
+        $valor = $this->inscricao?->valorCobrado() ?? 0;
+
+        return $valor > 0 ? PixPayload::make($valor) : '';
+    }
+
     public function with(): array
     {
         return [
@@ -120,53 +168,31 @@ new #[Layout('layouts.public')] class extends Component {
     }
 
     /**
-     * Mudou de esporte (ou de qualquer opção que mexe no preço)? O QR já gerado
-     * vale o valor antigo.
-     *
-     * Sem isto: a pessoa marca Futsal, gera o QR de R$ 60, marca Vôlei também,
-     * a tela passa a mostrar R$ 70 — mas o QR na tela continua cobrando 60. Ela
-     * paga 60, anexa o comprovante, e a tesouraria recebe um comprovante que não
-     * bate com o valor da inscrição.
+     * Etapa 1 → valida e salva. Com valor a pagar, a tela passa para o
+     * pagamento; sem valor, a inscrição termina aqui.
      */
-    public function updatedRespostas(): void
-    {
-        $this->reset(['mostrarPix', 'pixCopiaCola']);
-    }
-
-    public function gerarPix(): void
-    {
-        $valor = $this->precoFinal;
-
-        if ($valor <= 0) {
-            return;
-        }
-
-        $this->pixCopiaCola = PixPayload::make($valor);
-        $this->mostrarPix = true;
-    }
-
-    public function register(): void
+    public function salvarDados(): void
     {
         // O formulário fica dentro de @auth, mas o método continua endereçável
-        // por /livewire/update mesmo sem estar em tela nenhuma. Tirar o botão
-        // da view não protege nada.
+        // por /livewire/update mesmo sem estar em tela nenhuma.
         abort_unless(auth()->check(), 403);
 
         $evento = $this->event;
 
         abort_unless($evento->acceptsRegistrations(), 403, 'As inscrições para este evento não estão abertas.');
 
-        $chave = 'inscricao:'.auth()->id();
+        $existente = $this->inscricao;
 
-        if (RateLimiter::tooManyAttempts($chave, 5)) {
-            $this->addError('name', 'Muitas tentativas seguidas. Aguarde '.RateLimiter::availableIn($chave).' segundos.');
+        // Inscrição com comprovante (ou já confirmada) não volta a ser editada:
+        // mudar a modalidade mudaria o valor de um PIX que já foi pago.
+        if ($existente && ! $existente->isAwaitingReceipt()) {
+            $this->editando = false;
+            $this->addError('name', 'Você já está inscrito neste evento.');
 
             return;
         }
 
-        if ($this->jaInscrito) {
-            $this->addError('name', 'Você já está inscrito neste evento.');
-
+        if ($this->limiteEstourado('name')) {
             return;
         }
 
@@ -175,47 +201,28 @@ new #[Layout('layouts.public')] class extends Component {
 
         $dados = $this->validate($this->regras(), $this->mensagens());
 
-        RateLimiter::hit($chave, 300);
+        RateLimiter::hit($this->chaveDoLimite(), 300);
 
-        $caminhoComprovante = null;
-
-        if ($this->receipt) {
-            try {
-                // Disco privado: comprovante bancário não fica em endereço público.
-                $caminhoComprovante = $this->receipt->store('receipts', config('femopror.uploads.disk'));
-            } catch (Throwable $e) {
-                report($e);
-                $caminhoComprovante = false;
-            }
-
-            /*
-             * Se o armazenamento falhou, a inscrição NÃO pode ser criada.
-             * Sem isto, o `store()` devolvia false, a inscrição era gravada com
-             * o comprovante vazio, e ninguém percebia: a pessoa via "inscrição
-             * enviada com sucesso" e a tesouraria abria um registro sem anexo.
-             */
-            if ($caminhoComprovante === false) {
-                $this->addError('receipt', 'Não conseguimos guardar seu comprovante agora. Tente de novo em instantes — sua inscrição ainda não foi registrada.');
-
-                return;
-            }
-        }
+        $atributos = [
+            'church_id' => $dados['church_id'],
+            'name' => $dados['name'],
+            'email' => $dados['email'],
+            'phone' => $dados['phone'],
+            // Congela quanto o sistema cobrou: é contra isso que a tesouraria
+            // confere o comprovante, e é este o valor do QR da etapa 2.
+            'amount_paid' => $this->precoFinal,
+            'custom_answers' => $this->respostasParaRegistro(),
+        ];
 
         try {
-            $inscricao = Registration::create([
-                'event_id' => $evento->id,
-                'church_id' => $dados['church_id'],
-                'user_id' => auth()->id(),
-                'name' => $dados['name'],
-                'email' => $dados['email'],
-                'phone' => $dados['phone'],
-                'receipt_path' => $caminhoComprovante,
-                'payment_status' => 'pending',
-                // Congela quanto o sistema cobrou: é contra isso que a
-                // tesouraria confere o comprovante.
-                'amount_paid' => $this->precoFinal,
-                'custom_answers' => $this->respostasParaRegistro(),
-            ]);
+            $inscricao = $existente
+                ? tap($existente)->update($atributos)
+                : Registration::create($atributos + [
+                    'event_id' => $evento->id,
+                    'user_id' => auth()->id(),
+                    'payment_status' => 'pending',
+                    'receipt_path' => null,
+                ]);
         } catch (UniqueConstraintViolationException) {
             // Duplo clique ou duas abas: o índice único resolve a corrida.
             $this->addError('name', 'Você já está inscrito neste evento.');
@@ -224,22 +231,153 @@ new #[Layout('layouts.public')] class extends Component {
         }
 
         $this->guardarNoPerfil($dados);
+        $this->editando = false;
+        unset($this->inscricao);
 
-        // Comprovante de que o pedido chegou. Vai por SafeMail: a inscrição já
-        // está gravada, e SMTP fora do ar não pode virar erro na tela de quem
-        // acabou de se inscrever.
+        $inscricao->load('event');
+
+        // Ainda falta o comprovante: a tela vira a etapa de pagamento.
+        if ($inscricao->isAwaitingReceipt()) {
+            return;
+        }
+
+        // Nada mais a fazer por parte da pessoa: é aqui que ela recebe o resumo.
         SafeMail::send($inscricao->email, new InscricaoRecebida($inscricao));
 
-        session()->flash('success', 'Inscrição enviada com sucesso! Mandamos um e-mail para '.$inscricao->email.' com o resumo. A diretoria irá validar o seu comprovante em breve.');
+        if ($inscricao->valorCobrado() <= 0) {
+            session()->flash('success_titulo', 'Inscrição confirmada!');
+            session()->flash('success', 'Sua vaga está garantida. Mandamos um e-mail para '.$inscricao->email.' com o resumo.');
+        }
+    }
 
-        $this->reset(['phone', 'receipt', 'isVisitor', 'mostrarPix', 'pixCopiaCola']);
-        unset($this->jaInscrito);
+    /** Etapa 2 → anexa o comprovante à inscrição já salva. */
+    public function enviarComprovante(): void
+    {
+        abort_unless(auth()->check(), 403);
+
+        $inscricao = $this->inscricao;
+
+        // Só a própria inscrição, e só enquanto espera comprovante. De propósito
+        // NÃO exige inscrições abertas: quem salvou antes de fecharem ainda
+        // precisa conseguir pagar.
+        abort_unless($inscricao && $inscricao->isAwaitingReceipt(), 403);
+
+        if ($this->limiteEstourado('receipt')) {
+            return;
+        }
+
+        $this->validate([
+            'receipt' => ['required', 'image', 'max:'.UploadLimit::maxKilobytes()],
+        ], $this->mensagens());
+
+        RateLimiter::hit($this->chaveDoLimite(), 300);
+
+        $disco = config('femopror.uploads.disk');
+
+        try {
+            // Disco privado: comprovante bancário não fica em endereço público.
+            $caminho = $this->receipt->store('receipts', $disco);
+        } catch (Throwable $e) {
+            report($e);
+            $caminho = false;
+        }
+
+        // Falha de armazenamento NÃO pode marcar a inscrição como enviada:
+        // a pessoa veria "sucesso" e a tesouraria abriria um registro sem anexo.
+        if (! $caminho) {
+            $this->addError('receipt', 'Não conseguimos guardar seu comprovante agora. Tente de novo em instantes — sua inscrição continua salva.');
+
+            return;
+        }
+
+        // Só grava se ainda estiver sem comprovante: duas abas enviando juntas
+        // não podem deixar um arquivo sobrescrever o outro.
+        $gravou = Registration::whereKey($inscricao->getKey())
+            ->whereNull('receipt_path')
+            ->update(['receipt_path' => $caminho]);
+
+        if ($gravou === 0) {
+            Storage::disk($disco)->delete($caminho);
+            unset($this->inscricao);
+
+            return;
+        }
+
+        $inscricao->refresh()->load(['event', 'church']);
+
+        SafeMail::send($inscricao->email, new InscricaoRecebida($inscricao));
+
+        session()->flash('success_titulo', 'Inscrição enviada!');
+        session()->flash('success', 'Recebemos seu comprovante. Mandamos um e-mail para '.$inscricao->email.' com o resumo, e outro chega assim que a tesouraria confirmar o pagamento.');
+
+        $this->reset('receipt');
+        unset($this->inscricao);
+    }
+
+    /** Da etapa 2 de volta para a 1, para trocar modalidade ou corrigir dados. */
+    public function alterarDados(): void
+    {
+        abort_unless(auth()->check(), 403);
+
+        $inscricao = $this->inscricao;
+
+        abort_unless($inscricao && $inscricao->isAwaitingReceipt(), 403);
+        abort_unless($this->event->acceptsRegistrations(), 403, 'As inscrições para este evento não estão abertas.');
+
+        $this->preencherComInscricao($inscricao);
+        $this->resetErrorBag();
+        $this->editando = true;
+    }
+
+    public function cancelarAlteracao(): void
+    {
+        // Descarta o que foi mexido e não salvo: a etapa 2 mostra o que está
+        // gravado, e o formulário não pode ficar dizendo outra coisa.
+        if ($inscricao = $this->inscricao) {
+            $this->preencherComInscricao($inscricao);
+        }
+
+        $this->resetErrorBag();
+        $this->editando = false;
+    }
+
+    private function preencherComInscricao(Registration $inscricao): void
+    {
+        $this->name = (string) $inscricao->name;
+        $this->email = (string) $inscricao->email;
+        $this->phone = (string) $inscricao->phone;
+        $this->church_id = $inscricao->church_id ?? '';
+
+        $salvas = (array) ($inscricao->custom_answers ?? []);
+
+        foreach ($this->campos as $campo) {
+            $valor = $salvas[$campo['question']] ?? null;
+
+            $this->respostas[$campo['key']] = $campo['type'] === 'checkbox'
+                ? array_values((array) ($valor ?? []))
+                : (string) ($valor ?? '');
+        }
+    }
+
+    private function chaveDoLimite(): string
+    {
+        return 'inscricao:'.auth()->id();
+    }
+
+    private function limiteEstourado(string $campo): bool
+    {
+        if (! RateLimiter::tooManyAttempts($this->chaveDoLimite(), 10)) {
+            return false;
+        }
+
+        $this->addError($campo, 'Muitas tentativas seguidas. Aguarde '.RateLimiter::availableIn($this->chaveDoLimite()).' segundos.');
+
+        return true;
     }
 
     /**
      * Quem se inscreve sem ter completado o perfil não precisa digitar igreja e
-     * WhatsApp de novo na próxima vez. Só preenche o que está vazio: sobrescrever
-     * o que a pessoa escolheu em /profile seria mexer no cadastro dela sem pedir.
+     * WhatsApp de novo na próxima vez. Só preenche o que está vazio.
      */
     private function guardarNoPerfil(array $dados): void
     {
@@ -262,13 +400,6 @@ new #[Layout('layouts.public')] class extends Component {
             'email' => ['required', 'email', 'max:255'],
             'phone' => ['required', 'digits_between:10,11'],
             'church_id' => ['required', 'integer', 'exists:churches,id'],
-            'receipt' => [
-                // Evento gratuito não pede comprovante — era `required` fixo, o
-                // que deixava a inscrição de graça sem saída.
-                $this->event->requiresReceipt() ? 'required' : 'nullable',
-                'image',
-                'max:3072',
-            ],
         ];
 
         foreach ($this->campos as $campo) {
@@ -300,9 +431,9 @@ new #[Layout('layouts.public')] class extends Component {
             'phone.digits_between' => 'Informe o número com DDD (10 ou 11 dígitos).',
             'church_id.required' => 'Selecione a sua igreja local.',
             'church_id.exists' => 'Selecione uma igreja da lista.',
-            'receipt.required' => 'Você precisa anexar o comprovante do PIX.',
+            'receipt.required' => 'Anexe o comprovante do PIX para finalizar.',
             'receipt.image' => 'O comprovante precisa ser uma imagem (PNG ou JPG).',
-            'receipt.max' => 'A imagem do comprovante passa de 3 MB.',
+            'receipt.max' => 'A imagem do comprovante passa de '.UploadLimit::label().'. Tire um print menor ou reduza a foto.',
         ];
 
         foreach ($this->campos as $campo) {
@@ -315,9 +446,8 @@ new #[Layout('layouts.public')] class extends Component {
 
     /**
      * O banco guarda a resposta indexada pelo texto da pergunta (é assim que o
-     * painel e o dashboard exibem). O formulário, esse, trabalha com a chave
-     * estável: pergunta com ponto quebrava o wire:model, e pergunta com aspas
-     * quebrava o HTML.
+     * painel e o dashboard exibem). O formulário trabalha com a chave estável:
+     * pergunta com ponto quebrava o wire:model, e com aspas quebrava o HTML.
      */
     private function respostasParaRegistro(): array
     {
@@ -346,6 +476,17 @@ new #[Layout('layouts.public')] class extends Component {
         @endif
     @endpush
 
+    @php
+        $inscricao = $this->inscricao;
+
+        // Com inscrição salva, a tela mostra o que está gravado — a não ser que
+        // a pessoa tenha voltado para alterar (e as inscrições sigam abertas).
+        $mostrarSalva = $inscricao && ! ($editando && $event->acceptsRegistrations());
+
+        $valorExibido = $mostrarSalva ? $inscricao->valorCobrado() : $this->precoFinal;
+        $adicionais = round($this->precoFinal - (float) $event->price, 2);
+    @endphp
+
     <div class="max-w-4xl mx-auto bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
 
         <div class="p-4 sm:p-6 bg-gray-50 border-b border-gray-100">
@@ -360,7 +501,7 @@ new #[Layout('layouts.public')] class extends Component {
                 <div class="w-16 h-16 bg-green-100 text-green-800 rounded-full flex items-center justify-center mb-4">
                     <svg class="w-10 h-10" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>
                 </div>
-                <h2 class="text-2xl font-bold text-gray-900 mb-2">Inscrição Confirmada!</h2>
+                <h2 class="text-2xl font-bold text-gray-900 mb-2">{{ session('success_titulo', 'Inscrição enviada!') }}</h2>
                 <p class="text-gray-600 max-w-md mb-6">{{ session('success') }}</p>
                 <a href="{{ route('dashboard') }}" class="bg-green-900 text-white px-6 py-2.5 rounded-full font-bold shadow-md hover:bg-green-800 transition">
                     Ver minhas inscrições
@@ -369,93 +510,233 @@ new #[Layout('layouts.public')] class extends Component {
         @else
             <div class="grid grid-cols-1 md:grid-cols-2">
 
-                <div class="p-6 sm:p-8 bg-green-950 text-white flex flex-col justify-between">
-                    <div>
-                        <span class="bg-white/10 text-white text-xs font-bold px-3 py-1 rounded-full uppercase tracking-wide">
-                            {{ $event->event_date->format('d/m/Y H:i') }}
-                        </span>
-                        <h1 class="text-2xl font-bold mt-4 mb-2">{{ $event->title }}</h1>
-                        <p class="text-green-200 text-sm leading-relaxed mb-6">{{ $event->description }}</p>
+                {{-- Coluna do evento. O QR saiu daqui: ficava ao lado do formulário e
+                     convidava a pagar antes de escolher as modalidades. --}}
+                <div class="p-6 sm:p-8 bg-green-950 text-white">
+                    <span class="bg-white/10 text-white text-xs font-bold px-3 py-1 rounded-full uppercase tracking-wide">
+                        {{ $event->event_date->format('d/m/Y H:i') }}
+                    </span>
+                    <h1 class="text-2xl font-bold mt-4 mb-2">{{ $event->title }}</h1>
+                    <p class="text-green-200 text-sm leading-relaxed mb-6">{{ $event->description }}</p>
 
-                        <div class="space-y-3 text-sm border-t border-white/10 pt-6">
-                            @if($event->location)
-                                <div class="flex items-center gap-2">
-                                    <svg class="w-5 h-5 text-green-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
-                                    <span>{{ $event->location }}</span>
-                                </div>
-                            @endif
-
-                            <div class="flex items-center gap-2 text-lg font-bold mt-2 text-green-400" aria-live="polite">
-                                @if($this->precoFinal > 0)
-                                    <span>Valor: R$ {{ number_format($this->precoFinal, 2, ',', '.') }}</span>
-                                @else
-                                    <span>Inscrição gratuita</span>
-                                @endif
+                    <div class="space-y-4 text-sm border-t border-white/10 pt-6">
+                        @if($event->location)
+                            <div class="flex items-center gap-2">
+                                <svg class="w-5 h-5 text-green-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
+                                <span>{{ $event->location }}</span>
                             </div>
+                        @endif
 
-                            @if($this->precoFinal > 0)
-                                <div class="mt-4">
-                                    @if(! $mostrarPix)
-                                        <button type="button" wire:click="gerarPix" wire:loading.attr="disabled" class="w-full bg-green-800 hover:bg-green-700 text-white font-bold py-3 rounded-xl border border-green-700 shadow-md transition-colors flex items-center justify-center gap-2 disabled:opacity-60">
-                                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm14 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z"></path></svg>
-                                            Gerar QR Code PIX
-                                        </button>
-                                    @else
-                                        <div class="bg-white rounded-2xl p-6 mt-4 shadow-lg border border-green-800 text-center text-gray-900"
-                                             x-data="{ copiado: false }">
-                                            <h4 class="font-bold text-green-900 uppercase tracking-wider text-sm mb-4">Escaneie para pagar</h4>
+                        <div aria-live="polite">
+                            @if($valorExibido > 0)
+                                <p class="text-xs uppercase tracking-wide text-green-300">
+                                    {{ $mostrarSalva ? 'Valor da sua inscrição' : 'Valor' }}
+                                </p>
+                                <p class="text-2xl font-bold text-green-400 tabular-nums">
+                                    R$ {{ number_format($valorExibido, 2, ',', '.') }}
+                                </p>
 
-                                            <div class="bg-white p-2 rounded-xl border-2 border-gray-100 inline-block mb-4 shadow-sm">
-                                                {{-- Serviço externo: se não responder, o copia-e-cola abaixo continua valendo. --}}
-                                                <img src="https://api.qrserver.com/v1/create-qr-code/?size=200x200&data={{ urlencode($pixCopiaCola) }}"
-                                                     alt="QR Code do PIX no valor de R$ {{ number_format($this->precoFinal, 2, ',', '.') }}"
-                                                     referrerpolicy="no-referrer"
-                                                     loading="lazy"
-                                                     width="160" height="160"
-                                                     class="w-40 h-40"
-                                                     onerror="this.closest('div').innerHTML='<p class=&quot;text-xs text-gray-500 p-4&quot;>Não foi possível carregar o QR Code. Use o código abaixo.</p>'">
-                                            </div>
-
-                                            <p class="text-xs text-gray-500 font-bold mb-2">Ou use o PIX Copia e Cola:</p>
-
-                                            <div class="flex items-center bg-gray-50 border border-gray-200 rounded-lg overflow-hidden">
-                                                <input type="text" value="{{ $pixCopiaCola }}" readonly
-                                                       x-ref="pix"
-                                                       aria-label="Código PIX copia e cola"
-                                                       class="w-full bg-transparent text-xs text-gray-600 px-3 py-2 outline-none">
-                                                {{-- document.execCommand('copy') está depreciado; e alert() no meio do
-                                                     pagamento é hostil no celular. --}}
-                                                <button type="button"
-                                                        @click="navigator.clipboard.writeText($refs.pix.value).then(() => { copiado = true; setTimeout(() => copiado = false, 2000) })"
-                                                        class="bg-green-100 hover:bg-green-200 text-green-900 px-3 py-2 text-xs font-bold transition-colors border-l border-gray-200 whitespace-nowrap">
-                                                    <span x-text="copiado ? 'COPIADO!' : 'COPIAR'">COPIAR</span>
-                                                </button>
-                                            </div>
-                                        </div>
-                                    @endif
-                                </div>
+                                @if(! $mostrarSalva && $adicionais > 0)
+                                    <p class="mt-1 text-xs text-green-300 tabular-nums">
+                                        R$ {{ number_format((float) $event->price, 2, ',', '.') }} da inscrição
+                                        + R$ {{ number_format($adicionais, 2, ',', '.') }} das escolhas
+                                    </p>
+                                @endif
+                            @else
+                                <p class="text-lg font-bold text-green-400">Inscrição gratuita</p>
                             @endif
                         </div>
                     </div>
-
-                    @if($this->precoFinal > 0)
-                        <div class="bg-white/5 border border-white/10 rounded-xl p-5 mt-8">
-                            <h3 class="font-bold text-sm uppercase tracking-wide text-green-400 mb-2">Dados para Pagamento via PIX</h3>
-                            <p class="text-xs text-green-200 mb-4">Para confirmar sua inscrição, escaneie o QR-CODE ou faça o pix para a chave abaixo:</p>
-
-                            <div class="bg-black/20 p-3 rounded-lg flex items-center justify-between border border-black/10">
-                                <span class="text-xs font-mono select-all text-white">{{ config('femopror.pix.display_key') }}</span>
-                                <span class="text-[10px] bg-green-500 text-black font-bold px-2 py-0.5 rounded uppercase">{{ config('femopror.pix.display_label') }}</span>
-                            </div>
-                            <p class="text-[11px] text-green-300 mt-2 text-center">{{ config('femopror.pix.display_owner') }}</p>
-                        </div>
-                    @endif
                 </div>
 
                 <div class="p-6 sm:p-8">
-                    @if(! $event->acceptsRegistrations())
-                        {{-- Evento encerrado ou com inscrição ainda não aberta. A URL direta
-                             chegava aqui e mostrava o formulário assim mesmo. --}}
+
+                    {{-- ② PAGAMENTO — inscrição salva, falta o comprovante --}}
+                    @if($mostrarSalva && $inscricao->isAwaitingReceipt())
+                        <div>
+                            <x-etapas-inscricao :atual="2" />
+
+                            <h2 class="text-xl font-bold text-gray-900">Pagamento</h2>
+                            <p class="mt-1 mb-5 text-sm text-gray-500">
+                                Sua vaga está reservada. Agora é só pagar o PIX e anexar o comprovante.
+                            </p>
+
+                            <div class="rounded-xl border border-gray-200 bg-gray-50 p-4 text-sm">
+                                <div class="flex items-start justify-between gap-3">
+                                    <div class="min-w-0">
+                                        <p class="font-semibold text-gray-900 truncate">{{ $inscricao->name }}</p>
+                                        <p class="text-gray-500 truncate">{{ $inscricao->church?->name }}</p>
+                                    </div>
+
+                                    @if($event->acceptsRegistrations())
+                                        <button type="button" wire:click="alterarDados"
+                                                class="flex-shrink-0 text-xs font-semibold text-green-900 underline underline-offset-2 hover:text-green-700">
+                                            Alterar dados
+                                        </button>
+                                    @endif
+                                </div>
+
+                                @foreach((array) $inscricao->custom_answers as $pergunta => $resposta)
+                                    @if(filled($resposta))
+                                        <p class="mt-2 text-gray-700">
+                                            <span class="text-gray-400">{{ $pergunta }}</span><br>
+                                            {{ is_array($resposta) ? implode(', ', $resposta) : $resposta }}
+                                        </p>
+                                    @endif
+                                @endforeach
+
+                                <div class="mt-3 flex items-baseline justify-between border-t border-gray-200 pt-3">
+                                    <span class="text-gray-500">Total</span>
+                                    <span class="text-lg font-bold text-gray-900 tabular-nums">R$ {{ number_format($inscricao->valorCobrado(), 2, ',', '.') }}</span>
+                                </div>
+                            </div>
+
+                            <div class="mt-5 rounded-xl border border-gray-200 p-5 text-center" x-data="{ copiado: false }">
+                                <p class="mb-3 text-xs font-bold uppercase tracking-wider text-green-900">Pague com PIX</p>
+
+                                <div class="inline-block rounded-xl border-2 border-gray-100 bg-white p-2">
+                                    {{-- Serviço externo: se não responder, o copia-e-cola abaixo continua valendo. --}}
+                                    <img src="https://api.qrserver.com/v1/create-qr-code/?size=200x200&data={{ urlencode($this->pixCopiaCola) }}"
+                                         alt="QR Code do PIX no valor de R$ {{ number_format($inscricao->valorCobrado(), 2, ',', '.') }}"
+                                         referrerpolicy="no-referrer"
+                                         width="176" height="176"
+                                         class="h-44 w-44"
+                                         onerror="this.replaceWith(Object.assign(document.createElement('p'), { className: 'text-xs text-gray-500 p-4', textContent: 'Não foi possível carregar o QR Code. Use o código abaixo.' }))">
+                                </div>
+
+                                <p class="mt-3 mb-2 text-xs text-gray-500">Ou copie o código PIX:</p>
+
+                                <div class="flex items-center overflow-hidden rounded-lg border border-gray-200 bg-gray-50">
+                                    <input type="text" value="{{ $this->pixCopiaCola }}" readonly x-ref="pix"
+                                           aria-label="Código PIX copia e cola"
+                                           class="w-full bg-transparent px-3 py-2 text-xs text-gray-600 outline-none">
+                                    <button type="button"
+                                            @click="navigator.clipboard.writeText($refs.pix.value).then(() => { copiado = true; setTimeout(() => copiado = false, 2000) })"
+                                            class="whitespace-nowrap border-l border-gray-200 bg-green-100 px-3 py-2 text-xs font-bold text-green-900 transition-colors hover:bg-green-200">
+                                        <span x-text="copiado ? 'COPIADO!' : 'COPIAR'">COPIAR</span>
+                                    </button>
+                                </div>
+
+                                <p class="mt-3 text-[11px] leading-relaxed text-gray-400">
+                                    Chave ({{ config('femopror.pix.display_label') }}):
+                                    <span class="font-mono text-gray-600 select-all">{{ config('femopror.pix.display_key') }}</span><br>
+                                    {{ config('femopror.pix.display_owner') }}
+                                </p>
+                            </div>
+
+                            <form wire:submit.prevent="enviarComprovante" class="mt-5 space-y-4">
+                                {{-- Arquivo maior que o teto do PHP é descartado ANTES do Laravel:
+                                     a requisição chega vazia e não há validação que pegue. O
+                                     resultado era um spinner parado. Esta checagem avisa na hora. --}}
+                                <div x-data="{
+                                        maxBytes: {{ UploadLimit::maxBytes() }},
+                                        grande: false,
+                                        conferir(evento) {
+                                            const arquivo = evento.target.files[0]
+                                            this.grande = !! arquivo && arquivo.size > this.maxBytes
+                                            if (this.grande) evento.target.value = ''
+                                        }
+                                     }"
+                                     class="relative rounded-xl border-2 border-dashed bg-gray-50 p-4 text-center"
+                                     :class="grande ? 'border-red-300' : '@error('receipt') border-red-300 @else border-gray-200 @enderror'">
+                                    <label class="block cursor-pointer">
+                                        <svg class="mx-auto mb-2 h-8 w-8 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v1m-4-8l-4-4m0 0L8 8m4-4v12"></path></svg>
+                                        <span class="block text-xs font-semibold text-green-900">Anexar comprovante do PIX</span>
+                                        <span class="text-[10px] text-gray-400">PNG ou JPG, até {{ UploadLimit::label() }}</span>
+                                        <input type="file" wire:model="receipt" @change="conferir($event)" class="sr-only" accept="image/png,image/jpeg">
+                                    </label>
+
+                                    <div x-show="grande" x-cloak class="mt-2 text-xs font-medium text-red-600">
+                                        Essa imagem passa de {{ UploadLimit::label() }}. Tire um print da tela do banco
+                                        em vez da foto, ou reduza a imagem antes de anexar.
+                                    </div>
+
+                                    @if ($receipt)
+                                        <div x-show="! grande" class="mt-2 flex items-center justify-center gap-1 text-xs font-bold text-green-700">
+                                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>
+                                            Imagem carregada!
+                                        </div>
+                                    @endif
+
+                                    <div wire:loading wire:target="receipt" class="mt-2 text-xs font-semibold text-gray-500">Enviando arquivo...</div>
+                                    @error('receipt') <span class="mt-1 block text-left text-xs font-medium text-red-600">{{ $message }}</span> @enderror
+                                </div>
+
+                                <button type="submit" wire:loading.attr="disabled" wire:target="enviarComprovante,receipt"
+                                        class="flex w-full items-center justify-center gap-2 rounded-xl bg-green-900 py-3 font-bold text-white shadow-md transition hover:bg-green-800 disabled:opacity-50">
+                                    <span wire:loading.remove wire:target="enviarComprovante">Finalizar inscrição</span>
+                                    <span wire:loading wire:target="enviarComprovante">Enviando comprovante...</span>
+                                </button>
+                            </form>
+
+                            <p class="mt-4 text-center text-xs leading-relaxed text-gray-400">
+                                Pode sair desta página: sua inscrição fica salva. Para enviar o comprovante
+                                depois, é só voltar aqui ou abrir <a href="{{ route('dashboard') }}" class="font-semibold text-green-900 underline underline-offset-2">Minhas inscrições</a>.
+                            </p>
+                        </div>
+
+                    {{-- INSCRIÇÃO CONCLUÍDA --}}
+                    @elseif($mostrarSalva)
+                        @php($status = $inscricao->statusKey())
+
+                        <div class="flex h-full flex-col justify-center text-center">
+                            <div @class([
+                                'mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full',
+                                'bg-green-100 text-green-700' => in_array($status, ['pago', 'gratuita']),
+                                'bg-blue-50 text-blue-700' => $status === 'em_analise',
+                                'bg-amber-50 text-amber-700' => $status === 'aguardando_pagamento',
+                                'bg-red-50 text-red-700' => $status === 'cancelada',
+                            ])>
+                                <svg class="h-8 w-8" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+                                    @if($status === 'cancelada')
+                                        <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+                                    @elseif(in_array($status, ['em_analise', 'aguardando_pagamento']))
+                                        <path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                    @else
+                                        <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
+                                    @endif
+                                </svg>
+                            </div>
+
+                            <h3 class="mb-2 text-2xl font-bold tracking-tight text-gray-900">
+                                {{ $status === 'cancelada' ? 'Inscrição cancelada' : 'Você está inscrito!' }}
+                            </h3>
+
+                            <p class="mb-6 text-sm text-gray-600">
+                                @switch($status)
+                                    @case('pago') Pagamento confirmado pela tesouraria. Te esperamos lá! @break
+                                    @case('gratuita') Sua inscrição está confirmada. Te esperamos lá! @break
+                                    @case('em_analise') Recebemos seu comprovante. A tesouraria está conferindo — você recebe um e-mail quando o pagamento for confirmado. @break
+                                    @case('aguardando_pagamento') Sua inscrição está salva. Assim que o PIX cair, a tesouraria confirma o pagamento. @break
+                                    @case('cancelada') Esta inscrição foi cancelada. Em caso de dúvida, fale com a diretoria. @break
+                                @endswitch
+                            </p>
+
+                            {{-- Evento pago que não exige comprovante: a pessoa ainda precisa ver como pagar. --}}
+                            @if($status === 'aguardando_pagamento' && $this->pixCopiaCola !== '')
+                                <div class="mb-6 rounded-xl border border-gray-200 p-4" x-data="{ copiado: false }">
+                                    <p class="mb-2 text-xs font-bold uppercase tracking-wider text-green-900">
+                                        PIX de R$ {{ number_format($inscricao->valorCobrado(), 2, ',', '.') }}
+                                    </p>
+                                    <img src="https://api.qrserver.com/v1/create-qr-code/?size=200x200&data={{ urlencode($this->pixCopiaCola) }}"
+                                         alt="QR Code do PIX" referrerpolicy="no-referrer" width="160" height="160" class="mx-auto h-40 w-40">
+                                    <div class="mt-3 flex items-center overflow-hidden rounded-lg border border-gray-200 bg-gray-50">
+                                        <input type="text" value="{{ $this->pixCopiaCola }}" readonly x-ref="pix" aria-label="Código PIX copia e cola" class="w-full bg-transparent px-3 py-2 text-xs text-gray-600 outline-none">
+                                        <button type="button" @click="navigator.clipboard.writeText($refs.pix.value).then(() => { copiado = true; setTimeout(() => copiado = false, 2000) })"
+                                                class="whitespace-nowrap border-l border-gray-200 bg-green-100 px-3 py-2 text-xs font-bold text-green-900 hover:bg-green-200">
+                                            <span x-text="copiado ? 'COPIADO!' : 'COPIAR'">COPIAR</span>
+                                        </button>
+                                    </div>
+                                </div>
+                            @endif
+
+                            <a href="{{ route('dashboard') }}" class="mx-auto inline-flex items-center justify-center gap-2 rounded-full bg-green-900 px-6 py-3 font-bold text-white shadow-md transition-colors hover:bg-green-800">
+                                Ver minhas inscrições
+                            </a>
+                        </div>
+
+                    {{-- Evento encerrado ou com inscrição ainda não aberta --}}
+                    @elseif(! $event->acceptsRegistrations())
                         <div class="bg-gray-50 border-2 border-dashed border-gray-200 rounded-2xl p-10 text-center h-full flex flex-col items-center justify-center">
                             <div class="w-16 h-16 bg-white shadow-sm text-gray-400 rounded-full flex items-center justify-center mb-4">
                                 <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
@@ -474,26 +755,10 @@ new #[Layout('layouts.public')] class extends Component {
                             </a>
                         </div>
 
-                    @elseif($this->jaInscrito)
-                        <div class="bg-green-50 border-2 border-green-200 rounded-2xl p-8 text-center shadow-sm h-full flex flex-col justify-center">
-                            <div class="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
-                                <svg class="w-8 h-8 text-green-700" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
-                                </svg>
-                            </div>
+                    {{-- Congresso: escolha entre visitante e delegado --}}
+                    @elseif($event->is_congress && ! $isVisitor && ! $editando)
+                        @php($voltarPara = route('events.show', $event->id, absolute: false))
 
-                            <h3 class="text-2xl font-bold text-gray-900 mb-2 uppercase tracking-tight">Você já está inscrito!</h3>
-
-                            <p class="text-gray-600 mb-6 text-sm">
-                                Sua inscrição para este evento já foi registrada. Acompanhe o status diretamente na sua área exclusiva.
-                            </p>
-
-                            <a href="{{ route('dashboard') }}" class="inline-flex items-center justify-center gap-2 px-6 py-3 bg-green-900 text-white font-bold rounded-full hover:bg-green-800 transition-colors shadow-md">
-                                Acessar Meu Painel
-                            </a>
-                        </div>
-
-                    @elseif($event->is_congress && ! $isVisitor)
                         <div class="h-full flex flex-col justify-center">
                             <h2 class="text-2xl font-bold text-gray-900 text-center mb-2">Escolha sua categoria</h2>
                             <p class="text-gray-500 text-center text-sm mb-8">Para prosseguir com a inscrição, identifique-se abaixo:</p>
@@ -509,7 +774,7 @@ new #[Layout('layouts.public')] class extends Component {
                                         <span class="text-sm text-gray-600 text-center mt-2">Inscrição individual padrão.</span>
                                     </button>
                                 @else
-                                    <a href="{{ route('login') }}"
+                                    <a href="{{ route('login', ['redirect' => $voltarPara]) }}"
                                     class="group relative flex flex-col items-center justify-center p-6 bg-white border-2 border-green-800 rounded-2xl hover:bg-green-50 transition-all duration-300 w-full">
                                         <div class="w-12 h-12 bg-gray-100 text-gray-500 rounded-full flex items-center justify-center mb-3 group-hover:scale-110 transition-transform">
                                             <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path></svg>
@@ -530,39 +795,43 @@ new #[Layout('layouts.public')] class extends Component {
                             </div>
                         </div>
 
+                    {{-- ① SEUS DADOS --}}
                     @else
-                        <div class="flex items-center justify-between mb-6">
-                            <h2 class="text-xl font-bold text-gray-900">Formulário de Inscrição</h2>
-
-                            @if($event->is_congress)
-                                <button type="button" wire:click="$set('isVisitor', false)" class="text-xs text-gray-500 hover:text-green-900 font-bold flex items-center gap-1">
-                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path></svg>
-                                    Voltar
-                                </button>
-                            @endif
-                        </div>
-
                         @auth
-                            <p class="mb-5 flex items-start gap-2 rounded-lg border border-gray-200 bg-gray-50 px-3.5 py-2.5 text-xs leading-relaxed text-gray-500">
-                                <svg class="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-gray-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
-                                    <circle cx="12" cy="12" r="9" /><path stroke-linecap="round" d="M12 16v-4m0-3.5h.01" />
-                                </svg>
-                                <span>
-                                    Preenchemos com os dados da sua conta. Para mudar de vez,
-                                    edite o <a href="{{ route('profile.edit') }}" class="font-semibold text-green-900 underline underline-offset-2 hover:text-green-700">seu perfil</a>.
-                                </span>
-                            </p>
+                            @if($this->precoFinal > 0)
+                                <x-etapas-inscricao :atual="1" />
+                            @endif
 
-                            <form wire:submit.prevent="register" class="space-y-5">
+                            <div class="flex items-center justify-between mb-5">
+                                <h2 class="text-xl font-bold text-gray-900">{{ $editando ? 'Alterar dados' : 'Seus dados' }}</h2>
+
+                                @if($event->is_congress && ! $editando)
+                                    <button type="button" wire:click="$set('isVisitor', false)" class="text-xs text-gray-500 hover:text-green-900 font-bold flex items-center gap-1">
+                                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path></svg>
+                                        Voltar
+                                    </button>
+                                @endif
+                            </div>
+
+                            @unless($editando)
+                                <p class="mb-5 flex items-start gap-2 rounded-lg border border-gray-200 bg-gray-50 px-3.5 py-2.5 text-xs leading-relaxed text-gray-500">
+                                    <svg class="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-gray-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+                                        <circle cx="12" cy="12" r="9" /><path stroke-linecap="round" d="M12 16v-4m0-3.5h.01" />
+                                    </svg>
+                                    <span>
+                                        Preenchemos com os dados da sua conta. Para mudar de vez,
+                                        edite o <a href="{{ route('profile.edit') }}" class="font-semibold text-green-900 underline underline-offset-2 hover:text-green-700">seu perfil</a>.
+                                    </span>
+                                </p>
+                            @endunless
+
+                            <form wire:submit.prevent="salvarDados" class="space-y-5">
                                 <div>
                                     <label for="campo-nome" class="block text-xs font-bold text-gray-700 uppercase tracking-wider mb-1">Nome Completo</label>
-                                    {{-- O `value` explícito evita o campo aparecer vazio antes de o
-                                         Livewire aplicar o estado no primeiro carregamento. --}}
+                                    {{-- `value` explícito: evita o campo aparecer vazio antes de o Livewire aplicar o estado. --}}
                                     <input id="campo-nome" type="text" wire:model="name" value="{{ $name }}" autocomplete="name"
                                            @error('name') aria-invalid="true" @enderror
                                            class="w-full border rounded-xl px-4 py-2.5 text-sm focus:ring-1 transition outline-none @error('name') border-red-400 focus:border-red-500 focus:ring-red-500 @else border-gray-200 focus:border-green-900 focus:ring-green-900 @enderror">
-                                    {{-- Sem estes blocos, falha em nome/e-mail/igreja fazia o botão
-                                         simplesmente não responder, sem dizer por quê. --}}
                                     @error('name') <span class="text-red-600 text-xs mt-1 block font-medium">{{ $message }}</span> @enderror
                                 </div>
 
@@ -574,20 +843,10 @@ new #[Layout('layouts.public')] class extends Component {
                                 </div>
 
                                 <div>
-                                    <label for="campo-telefone" class="block text-xs font-bold text-gray-700 uppercase tracking-wider mb-1">
-                                        WhatsApp / Telefone
-                                    </label>
-                                    {{-- maxlength era 11 e cortava o número de quem digitava com
-                                         máscara. Agora o servidor normaliza para dígitos. --}}
-                                    <input id="campo-telefone" type="tel"
-                                        wire:model="phone"
-                                        value="{{ $phone }}"
-                                        inputmode="numeric"
-                                        maxlength="16"
-                                        autocomplete="tel"
-                                        placeholder="(84) 99999-9999"
-                                        class="w-full border rounded-xl px-4 py-2.5 text-sm focus:ring-1 transition outline-none @error('phone') border-red-400 focus:border-red-500 focus:ring-red-500 @else border-gray-200 focus:border-green-900 focus:ring-green-900 @enderror">
-
+                                    <label for="campo-telefone" class="block text-xs font-bold text-gray-700 uppercase tracking-wider mb-1">WhatsApp / Telefone</label>
+                                    <input id="campo-telefone" type="tel" wire:model="phone" value="{{ $phone }}"
+                                           inputmode="numeric" maxlength="16" autocomplete="tel" placeholder="(84) 99999-9999"
+                                           class="w-full border rounded-xl px-4 py-2.5 text-sm focus:ring-1 transition outline-none @error('phone') border-red-400 focus:border-red-500 focus:ring-red-500 @else border-gray-200 focus:border-green-900 focus:ring-green-900 @enderror">
                                     @error('phone') <span class="text-red-600 text-xs mt-1 block font-medium">{{ $message }}</span> @enderror
                                 </div>
 
@@ -642,30 +901,28 @@ new #[Layout('layouts.public')] class extends Component {
                                     </div>
                                 @endif
 
-                                @if($event->requiresReceipt())
-                                    <div class="border-2 border-dashed rounded-xl p-4 bg-gray-50 text-center relative mt-4 @error('receipt') border-red-300 @else border-gray-200 @enderror">
-                                        <label class="cursor-pointer block">
-                                            <svg class="mx-auto h-8 w-8 text-gray-400 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v1m-4-8l-4-4m0 0L8 8m4-4v12"></path></svg>
-                                            <span class="text-xs font-semibold text-green-900 block">Anexar Comprovante do PIX</span>
-                                            <span class="text-[10px] text-gray-400">Clique para selecionar (PNG ou JPG, até 3 MB)</span>
-                                            <input type="file" wire:model="receipt" class="sr-only" accept="image/png,image/jpeg">
-                                        </label>
-
-                                        @if ($receipt)
-                                            <div class="mt-2 text-xs font-bold text-green-700 flex items-center justify-center gap-1">
-                                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>
-                                                Imagem carregada!
-                                            </div>
-                                        @endif
-                                        <div wire:loading wire:target="receipt" class="text-xs text-gray-500 font-semibold mt-2">Enviando arquivo...</div>
-                                        @error('receipt') <span class="text-red-600 text-xs mt-1 block font-medium text-left">{{ $message }}</span> @enderror
+                                {{-- Total corrente antes de seguir: a pessoa vê o que vai pagar
+                                     antes de o PIX existir. --}}
+                                @if($this->precoFinal > 0)
+                                    <div class="flex items-baseline justify-between rounded-xl bg-gray-50 px-4 py-3" aria-live="polite">
+                                        <span class="text-sm text-gray-500">Total</span>
+                                        <span class="text-lg font-bold text-gray-900 tabular-nums">R$ {{ number_format($this->precoFinal, 2, ',', '.') }}</span>
                                     </div>
                                 @endif
 
-                                <button type="submit" wire:loading.attr="disabled" wire:target="register" class="w-full bg-green-900 text-white font-bold py-3 rounded-xl shadow-md hover:bg-green-800 transition disabled:opacity-50 flex items-center justify-center gap-2">
-                                    <span wire:loading.remove wire:target="register">Finalizar Minha Inscrição</span>
-                                    <span wire:loading wire:target="register">Processando inscrição...</span>
+                                <button type="submit" wire:loading.attr="disabled" wire:target="salvarDados"
+                                        class="w-full bg-green-900 text-white font-bold py-3 rounded-xl shadow-md hover:bg-green-800 transition disabled:opacity-50 flex items-center justify-center gap-2">
+                                    <span wire:loading.remove wire:target="salvarDados">
+                                        {{ $this->precoFinal > 0 ? 'Ir para pagamento →' : 'Confirmar inscrição' }}
+                                    </span>
+                                    <span wire:loading wire:target="salvarDados">Salvando...</span>
                                 </button>
+
+                                @if($editando)
+                                    <button type="button" wire:click="cancelarAlteracao" class="w-full text-center text-sm text-gray-500 hover:text-gray-900">
+                                        Cancelar e voltar ao pagamento
+                                    </button>
+                                @endif
                             </form>
                         @else
                             @php($voltarPara = route('events.show', $event->id, absolute: false))
@@ -683,9 +940,7 @@ new #[Layout('layouts.public')] class extends Component {
                                     confirmação do pagamento depois.
                                 </p>
 
-                                {{-- Os dois caminhos levam o `redirect` de volta para este evento.
-                                     Antes havia um botão só, apontando para /login sem destino:
-                                     quem entrava caía no dashboard e tinha que achar o evento de novo. --}}
+                                {{-- Os dois caminhos levam o `redirect` de volta para este evento. --}}
                                 <div class="w-full max-w-xs space-y-3">
                                     <a href="{{ route('register', ['redirect' => $voltarPara]) }}"
                                        class="block w-full px-8 py-3 bg-green-900 text-white font-bold rounded-xl shadow-md hover:bg-green-800 transition text-center">

@@ -3,7 +3,9 @@
 namespace App\Providers;
 
 use Carbon\Carbon;
+use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\URL;
+use Livewire\Livewire;
 use Illuminate\Support\ServiceProvider;
 use Illuminate\Support\Facades\Storage;
 use RuntimeException;
@@ -25,6 +27,7 @@ class AppServiceProvider extends ServiceProvider
     {
         $this->hardenProduction();
         $this->enableTemporaryUrlsForPrivateFiles();
+        $this->throttleLivewireRequests();
 
         Carbon::setLocale(config('app.locale'));
     }
@@ -49,6 +52,27 @@ class AppServiceProvider extends ServiceProvider
         // Sem isso, um link http:// gerado em qualquer canto faz o navegador
         // mandar o cookie de sessão em texto claro.
         URL::forceScheme('https');
+    }
+
+    /**
+     * Teto para o endpoint que executa as ações do Livewire.
+     *
+     * `/livewire/update` só vinha com `web` — nenhum limite. É por ele que
+     * passam mount, mudança de campo e chamada de método, então sem teto um
+     * script consegue martelar o banco à vontade. As ações de gravar já se
+     * limitam por usuário; isto aqui é o teto por IP, folgado o bastante para
+     * não atrapalhar quem está usando o painel de verdade (o Filament dispara
+     * várias requisições por interação).
+     *
+     * O upload temporário tem limite próprio do Livewire (60/min).
+     */
+    private function throttleLivewireRequests(): void
+    {
+        Livewire::setUpdateRoute(
+            fn ($handle) => Route::post('/livewire/update', $handle)
+                ->middleware(['web', 'throttle:240,1'])
+                ->name('livewire.update')
+        );
     }
 
     /**

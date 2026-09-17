@@ -142,29 +142,35 @@ class FluxoInscricaoCopaTest extends TestCase
         $this->assertSame(75.0, $componente->instance()->precoFinal);
     }
 
-    public function test_mudar_de_esporte_invalida_o_qr_code_ja_gerado(): void
+    public function test_qr_code_cobra_o_valor_salvo_e_acompanha_a_alteracao(): void
     {
-        // Sem isto: gera o QR de R$ 55, marca mais um esporte, a tela mostra
-        // R$ 70 e o QR na tela continua cobrando 55. A pessoa paga a menos e a
-        // tesouraria recebe um comprovante que não fecha.
+        // O QR sai do valor SALVO na inscrição, não do que está na tela. Na
+        // versão antiga dava para gerar o de R$ 55, marcar mais um esporte e
+        // continuar com o QR cobrando 55. Agora mudar a escolha exige voltar à
+        // etapa 1 e salvar de novo, e o QR acompanha.
         $copa = $this->copa();
         $chave = $this->chaveDosEsportes($copa);
 
         $componente = Livewire::actingAs(User::factory()->create())
             ->test('event-show', ['id' => $copa->id])
+            ->set('name', 'Fulano de Tal')
+            ->set('email', 'fulano@example.com')
+            ->set('phone', '84991350289')
+            ->set('church_id', Church::factory()->create()->id)
             ->set("respostas.$chave", ['Futsal (+15,00)'])
-            ->call('gerarPix')
-            ->assertSet('mostrarPix', true);
+            ->call('salvarDados');
 
-        $pixAntigo = $componente->get('pixCopiaCola');
-        $this->assertNotSame('', $pixAntigo);
+        // Campo 54 do BR Code: tamanho 05, valor "55.00".
+        $this->assertStringContainsString('540555.00', $componente->instance()->pixCopiaCola);
 
-        $componente->set("respostas.$chave", ['Futsal (+15,00)', 'Vôlei (+15,00)'])
-            ->assertSet('mostrarPix', false)
-            ->assertSet('pixCopiaCola', '');
+        $componente
+            ->call('alterarDados')
+            ->set("respostas.$chave", ['Futsal (+15,00)', 'Vôlei (+15,00)'])
+            ->call('salvarDados');
 
-        $componente->call('gerarPix');
-        $this->assertNotSame($pixAntigo, $componente->get('pixCopiaCola'));
+        $pix = $componente->instance()->pixCopiaCola;
+        $this->assertStringContainsString('540570.00', $pix);
+        $this->assertStringNotContainsString('540555.00', $pix);
     }
 
     // --------------------------------------------------- comprovante e e-mail
@@ -186,8 +192,10 @@ class FluxoInscricaoCopaTest extends TestCase
             ->set('email', 'fulano@example.com')
             ->set('phone', '(84) 99135-0289')
             ->set('church_id', $igreja->id)
+            ->call('salvarDados')
+            ->assertHasNoErrors()
             ->set('receipt', UploadedFile::fake()->image('comprovante.jpg'))
-            ->call('register')
+            ->call('enviarComprovante')
             ->assertHasNoErrors();
 
         $inscricao = Registration::sole();
@@ -202,21 +210,28 @@ class FluxoInscricaoCopaTest extends TestCase
         Storage::disk(config('femopror.uploads.disk'))->assertExists($inscricao->receipt_path);
     }
 
-    public function test_e_mail_de_recebimento_sai_ao_se_inscrever(): void
+    public function test_e_mail_de_recebimento_sai_quando_o_comprovante_e_enviado(): void
     {
         Storage::fake(config('femopror.uploads.disk'));
         Mail::fake();
 
         $copa = $this->copa();
 
-        Livewire::actingAs(User::factory()->create())
+        $componente = Livewire::actingAs(User::factory()->create())
             ->test('event-show', ['id' => $copa->id])
             ->set('name', 'Fulano de Tal')
             ->set('email', 'fulano@example.com')
             ->set('phone', '84991350289')
             ->set('church_id', Church::factory()->create()->id)
+            ->call('salvarDados')
+            ->assertHasNoErrors();
+
+        // Só salvar os dados ainda não é "recebemos sua inscrição": falta pagar.
+        Mail::assertNothingSent();
+
+        $componente
             ->set('receipt', UploadedFile::fake()->image('comprovante.jpg'))
-            ->call('register')
+            ->call('enviarComprovante')
             ->assertHasNoErrors();
 
         Mail::assertSent(InscricaoRecebida::class, fn ($mail) => $mail->hasTo('fulano@example.com'));
@@ -238,11 +253,12 @@ class FluxoInscricaoCopaTest extends TestCase
             ->set('email', 'fulano@example.com')
             ->set('phone', '84991350289')
             ->set('church_id', Church::factory()->create()->id)
+            ->call('salvarDados')
             ->set('receipt', UploadedFile::fake()->image('comprovante.jpg'))
-            ->call('register')
+            ->call('enviarComprovante')
             ->assertHasNoErrors();
 
-        $this->assertSame(1, Registration::count());
+        $this->assertNotNull(Registration::sole()->receipt_path);
     }
 
     public function test_e_mail_de_confirmacao_sai_quando_a_tesouraria_aprova(): void

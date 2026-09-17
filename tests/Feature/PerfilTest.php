@@ -108,8 +108,7 @@ class PerfilTest extends TestCase
             ->set('email', 'fulano@example.com')
             ->set('phone', '84991350289')
             ->set('church_id', $igreja->id)
-            ->set('receipt', UploadedFile::fake()->image('pix.jpg'))
-            ->call('register')
+            ->call('salvarDados')
             ->assertHasNoErrors();
 
         $user->refresh();
@@ -135,8 +134,7 @@ class PerfilTest extends TestCase
             ->set('email', 'fulano@example.com')
             ->set('phone', '84911111111')
             ->set('church_id', $outraIgreja->id)
-            ->set('receipt', UploadedFile::fake()->image('pix.jpg'))
-            ->call('register')
+            ->call('salvarDados')
             ->assertHasNoErrors();
 
         $user->refresh();

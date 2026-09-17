@@ -6,11 +6,13 @@
 
     <p style="margin:0 0 20px 0; font-size:15px; line-height:1.65; color:#374151;">
         Olá, {{ explode(' ', $inscricao->name)[0] }}. Sua inscrição chegou aqui certinho.
-        @if((float) $inscricao->amount_paid > 0)
+        @if((float) $inscricao->amount_paid <= 0)
+            Sua vaga já está registrada.
+        @elseif(filled($inscricao->receipt_path))
             Agora a tesouraria vai conferir o comprovante do PIX, assim que confirmar, você
             recebe outro e-mail avisando.
         @else
-            Sua vaga já está registrada.
+            Assim que o pagamento cair, a tesouraria confirma e você recebe outro e-mail avisando.
         @endif
     </p>
 
@@ -21,8 +23,13 @@
             <tr>
                 <td style="padding:14px 18px;">
                     <p style="margin:0; font-size:14px; line-height:1.6; color:#92400e;">
-                        <strong>Situação: em análise.</strong> A conferência do comprovante é feita
-                        manualmente pela tesouraria e costuma levar alguns dias.
+                        @if(filled($inscricao->receipt_path))
+                            <strong>Situação: em análise.</strong> A conferência do comprovante é feita
+                            manualmente pela tesouraria e costuma levar alguns dias.
+                        @else
+                            <strong>Situação: aguardando pagamento.</strong> O PIX continua disponível
+                            na página do evento e em Minhas inscrições.
+                        @endif
                     </p>
                 </td>
             </tr>

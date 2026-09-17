@@ -51,6 +51,26 @@ em `User`): são as duas colunas que decidem acesso a painel, e só o `UserResou
 
 ---
 
+## Limites de requisição (rate limit)
+
+O público se inscreve **em grupo, do wi-fi da igreja** — várias pessoas saem do mesmo IP ao
+mesmo tempo. Os tetos são folgados para não barrar a galera no dia do evento, e ainda assim
+pequenos demais para um script, que faz milhares de tentativas.
+
+| Onde | Teto | Por quê |
+|---|---|---|
+| `POST /register` | 20/min por IP | Não havia nenhum: cada requisição virava uma conta, e o cadastro não exige verificação de e-mail |
+| `POST /login` | 20/min por IP | O `LoginRequest` já conta 5 por e-mail+IP; este teto pega quem troca de e-mail a cada tentativa |
+| `POST /forgot-password` | 5/min por IP | Cada pedido dispara um e-mail: sem teto dá para queimar a cota diária do SMTP |
+| `POST /reset-password`, `PUT /password` | 10/min | Força bruta de token e de senha |
+| `POST /confirm-password` | 6/min | Força bruta contra uma sessão já aberta |
+| `POST /livewire/update` | 240/min por IP | Só vinha com `web`. É por ele que passam mount, mudança de campo e chamada de método (`AppServiceProvider::throttleLivewireRequests()`) |
+| `salvarDados` / `enviarComprovante` | 10 / 5 min por usuário | Limite de gravação, dentro do componente |
+| Upload temporário do Livewire | 60/min | Padrão do próprio Livewire |
+
+Coberto por `AuditoriaSegurancaTest`, que também falha se alguma dessas rotas perder o
+`throttle`.
+
 ## Padrão de segurança (seguir em todo formulário novo)
 
 1. **Nada que decide permissão vem do cliente.** `church_id` e `status` da inscrição de
@@ -172,15 +192,65 @@ Menu: os links somem abaixo de `lg` e viram sanfona. Antes eram quatro links e u
 ### Página do evento — `/eventos/{id}`
 `⚡event-show.blade.php`. Faz o trabalho pesado do site.
 
-- `mount()` recusa evento em **rascunho** com 404. Encerrado e "ainda vai abrir" carregam a
-  página, mas mostram o painel de aviso em vez do formulário.
-- `register()` revalida tudo no servidor: login, `Event::acceptsRegistrations()`,
-  duplicidade, rate limit (5 tentativas / 5 min por usuário) e o índice único como última
-  linha contra corrida.
-- **Comprovante só é exigido quando o evento cobra** (`Event::requiresReceipt()`). Evento
-  gratuito pedindo PIX era um beco sem saída.
-- Telefone entra com máscara e é normalizado para dígitos antes de gravar. O campo tinha
-  `maxlength="11"` e cortava o número de quem digitava "(84) 99135-0289".
+#### A inscrição acontece em duas etapas
+
+```
+① Seus dados   salvarDados()        valida e SALVA, com o valor congelado
+② Pagamento    enviarComprovante()  mostra o PIX desse valor e recebe o comprovante
+```
+
+**A inscrição é salva ANTES do pagamento.** É a decisão central da tela. Pagar pelo celular
+é sair do navegador e abrir o app do banco — e o navegador muitas vezes descarta a aba que
+ficou para trás. Se nada estivesse salvo, a pessoa pagava, voltava para um formulário
+vazio, e a tesouraria recebia um PIX sem inscrição nenhuma.
+
+Por isso **a tela não guarda "em que etapa estou" numa propriedade: ela pergunta ao banco.**
+Tem inscrição esperando comprovante? Etapa 2. Reabrir a página, trocar de aparelho ou voltar
+por "Minhas inscrições" (que tem o botão "Pagar e enviar comprovante") cai no lugar certo
+sem código extra. A única propriedade de etapa é `$editando`, para quando a pessoa volta do
+pagamento para alterar os dados.
+
+- **O QR sai do valor SALVO** (`amount_paid`), nunca do total da tela. Na versão anterior o
+  QR ficava ao lado do formulário e podia ser gerado antes de escolher as modalidades — e
+  continuar cobrando o valor antigo depois. Agora mudar a escolha exige "Alterar dados" e
+  salvar de novo, e o QR acompanha.
+- **"Alterar dados" só existe enquanto não há comprovante** (`Registration::isAwaitingReceipt()`).
+  Depois dele, mudar a modalidade mudaria o valor de um PIX já pago. A trava está nos
+  métodos, não só no botão.
+- **Enviar o comprovante NÃO exige inscrições abertas.** Quem salvou antes de fecharem ainda
+  precisa conseguir pagar.
+- **Nada a pagar, uma etapa só:** com total zero, `salvarDados()` já conclui e manda o e-mail.
+- O comprovante só grava se a inscrição ainda estiver sem ele (`whereNull('receipt_path')`):
+  duas abas enviando juntas não sobrescrevem uma à outra.
+- A inscrição é sempre buscada pelo **usuário autenticado** (`inscricao()`): nenhum id vem do
+  navegador, então não há como anexar comprovante na inscrição de outra pessoa.
+- `mount()` recusa evento em **rascunho** com 404. Encerrado e "ainda vai abrir" mostram o
+  painel de aviso — a não ser que a pessoa já tenha inscrição salva.
+- Rate limit de 10 gravações / 5 min por usuário, e o índice único como última linha contra
+  corrida.
+- Telefone entra com máscara e é normalizado para dígitos antes de gravar.
+
+#### O status da inscrição é derivado
+
+`payment_status` sozinho deixou de dizer muito: "pendente" pode ser "ainda nem pagou" ou
+"pagou e mandou o comprovante". `Registration::statusKey()` combina a coluna com a presença
+do comprovante e o valor — **sem coluna nova**:
+
+| `statusKey()` | Quando | Rótulo |
+|---|---|---|
+| `aguardando_comprovante` | pendente, sem comprovante, evento exige | Aguardando comprovante |
+| `aguardando_pagamento` | pendente, sem comprovante, evento não exige | Aguardando pagamento |
+| `em_analise` | pendente, com comprovante | Comprovante em análise |
+| `gratuita` | valor zero | Inscrição confirmada |
+| `pago` / `cancelada` | `paid` / `failed` | Pagamento confirmado / Cancelada |
+
+Painel do participante, página do evento e a tabela da tesouraria usam os mesmos
+`statusLabel()` e `statusColor()`. A tabela ganhou o filtro **Com / Sem comprovante** — é o
+"o que tem para conferir?" do dia a dia — e o "Confirmar Pagamento" avisa quando a inscrição
+ainda não tem comprovante anexado.
+
+`Event::requiresReceiptFor($valor)` pergunta sobre o **valor da inscrição**, não o preço
+base: um evento de base gratuita pode cobrar pelas modalidades escolhidas.
 
 **PIX:** `App\Support\PixPayload` monta o BR Code (EMV®QRCPS + CRC-16/CCITT-FALSE) a partir de
 `config/femopror.php`. Chave, tesoureiro e cidade estavam escritos na view.
@@ -319,11 +389,12 @@ congresso.
 | Arquivo | Cobre |
 |---|---|
 | `SegurancaTest` | acesso a cada painel por papel, `church_id`/`status` forjados na inscrição da UMP, escopo entre igrejas, inscrição aprovada travada, duplicidade, último admin, `is_admin` fora do mass assignment, seeder recusado em produção |
-| `InscricaoEventoTest` | inscrição por deslogado, rascunho/encerrado/ainda-não-aberto, duplicidade, comprovante só quando cobra, preço no servidor, resposta forjada, valor congelado, telefone normalizado, comprovante no disco privado |
+| `InscricaoEventoTest` | as duas etapas: inscrição salva antes do comprovante, retomada depois de fechar a aba, alterar dados atualizando a mesma inscrição, alteração barrada depois do comprovante, comprovante aceito mesmo com inscrições fechadas, comprovante na inscrição de outra pessoa recusado, evento gratuito concluindo em uma etapa; mais deslogado, rascunho/encerrado/ainda-não-aberto, preço no servidor, resposta forjada, valor congelado, telefone normalizado, disco privado |
 | `PainelParticipanteTest` | dashboard de delegado (regressão do 500), vínculo sobrevivendo à troca de e-mail, delegação amarrada no cadastro, isolamento entre participantes |
 | `PaginaInicialTest` | home responde, rascunho escondido, ícone inválido não derruba a página, diretoria ativa, ordenação das igrejas, meta de compartilhamento |
 | `PerfilTest` | igreja e telefone gravados e normalizados, opcionais, validação, prefill da inscrição, perfil completado sem sobrescrever |
-| `FluxoInscricaoCopaTest` | o caminho inteiro de um evento avulso: os dois botões para quem está deslogado, criar conta e voltar para o evento, entrar e voltar, alternar sem perder o destino, open redirect recusado, esportes somando no valor, QR invalidado ao mudar de esporte, comprovante no disco privado, os dois e-mails, falha de SMTP não derrubando a inscrição |
+| `AuditoriaSegurancaTest` | as quatro frentes: tetos de requisição (e a checagem de que as rotas sensíveis declaram `throttle`), payload de SQL sobrevivendo como texto, cada área restrita recusando usuário comum e visitante, arquivo privado só com assinatura válida, HTML sem dados de outro participante, e o inventário de propriedades públicas do componente de inscrição |
+| `FluxoInscricaoCopaTest` | o caminho inteiro de um evento avulso: os dois botões para quem está deslogado, criar conta e voltar para o evento, entrar e voltar, alternar sem perder o destino, open redirect recusado, esportes somando no valor, QR cobrando o valor salvo e acompanhando a alteração, comprovante no disco privado, e-mail só depois do comprovante, falha de SMTP não derrubando a inscrição |
 | `PixPayloadTest` | estrutura do BR Code, valor, normalização de acento/tamanho, CRC |
 
 Factories: `UserFactory` (`admin()`, `ofChurch()` = presidente, `memberOfChurch()` = só
@@ -375,6 +446,12 @@ não repita a lógica de borda vermelha em cada formulário.
 - **`explode(',')` em lista com valor monetário** quebra no separador decimal.
 - **Migration com `down()` vazio** não dá rollback e quebra o re-run. Uma já foi corrigida
   por migration nova (editar a original não teria efeito: ela já rodou em produção).
+- **Arquivo maior que `upload_max_filesize` some sem erro.** O PHP descarta a requisição
+  antes de o Laravel existir: não há validação que pegue, e a pessoa fica olhando o spinner.
+  Foto de celular passa de 2 MB com frequência. Por isso `App\Support\UploadLimit` calcula o
+  teto real (o menor entre `upload_max_filesize`, `post_max_size` e os 3 MB do projeto), e a
+  tela anuncia, valida e confere no navegador **esse** número — nunca um que o servidor
+  recusa. Se o limite anunciado estiver baixo, o ajuste é no `php.ini` do servidor.
 - **Sem região, o SDK da AWS nem constrói o cliente.** Falta `AWS_DEFAULT_REGION` e vem
   "Missing required client configuration options: region" — e com `throw => false` isso
   desaparecia: o upload simplesmente não acontecia, sem erro em tela. O disco já assume
@@ -394,8 +471,12 @@ não repita a lógica de borda vermelha em cada formulário.
   arquivos lá. Por isso o `phpunit.xml` fixa `UPLOADS_DISK=local`, e os testes usam
   `Storage::fake(config('femopror.uploads.disk'))`, nunca um nome de disco na mão.
 - **Valor congelado na tela envelhece.** O QR do PIX era gerado uma vez e ficava lá: marcar
-  mais um esporte subia o preço exibido e o QR continuava cobrando o valor antigo. Qualquer
-  coisa derivada do preço precisa morrer quando o preço muda (`updatedRespostas()`).
+  mais um esporte subia o preço exibido e o QR continuava cobrando o valor antigo. A primeira
+  correção foi invalidar o QR a cada mudança; a definitiva foi o QR passar a sair do valor
+  **salvo** na inscrição, que só muda passando de novo pela etapa 1.
+- **Estado de etapa em propriedade Livewire não sobrevive à aba morta.** Um `$etapa = 2` some
+  quando o navegador descarta a aba — e no celular isso acontece justo na ida ao app do banco.
+  Etapa que importa tem que ser derivada do que está gravado.
 - **`@php use ... @endphp` numa view Blade quebra com "unexpected token use"**: o `use` não
   fica no topo do arquivo compilado. Referencie pelo nome completo (`\App\Support\X::`).
 - **Heredoc do bash come barra invertida.** `'/\\'` num `cat <<'PHP'` chegou no arquivo como

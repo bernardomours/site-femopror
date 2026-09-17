@@ -2,19 +2,34 @@
 
 namespace Tests\Feature;
 
+use App\Mail\InscricaoRecebida;
 use App\Models\Church;
 use App\Models\Event;
 use App\Models\Registration;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Storage;
+use Livewire\Features\SupportTesting\Testable;
 use Livewire\Livewire;
 use Tests\TestCase;
 
+/**
+ * Inscrição em duas etapas: ① dados (salva a inscrição) → ② pagamento
+ * (anexa o comprovante).
+ */
 class InscricaoEventoTest extends TestCase
 {
     use RefreshDatabase;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        Storage::fake(config('femopror.uploads.disk'));
+        Mail::fake();
+    }
 
     private function evento(array $estado = []): Event
     {
@@ -26,18 +41,25 @@ class InscricaoEventoTest extends TestCase
         return UploadedFile::fake()->image('pix.jpg');
     }
 
-    public function test_visitante_deslogado_nao_consegue_gravar_inscricao(): void
+    /** Preenche a etapa 1 com dados válidos. */
+    private function preencher(Testable $componente, ?Church $igreja = null): Testable
     {
-        // O formulário fica dentro de @auth, mas o método continua endereçável
-        // por /livewire/update.
-        $evento = $this->evento();
-
-        Livewire::test('event-show', ['id' => $evento->id])
+        return $componente
             ->set('name', 'Fulano de Tal')
             ->set('email', 'fulano@example.com')
             ->set('phone', '84999999999')
-            ->set('church_id', Church::factory()->create()->id)
-            ->call('register')
+            ->set('church_id', ($igreja ?? Church::factory()->create())->id);
+    }
+
+    // ------------------------------------------------------------ acesso
+
+    public function test_visitante_deslogado_nao_consegue_salvar_inscricao(): void
+    {
+        // O formulário fica dentro de @auth, mas o método continua endereçável.
+        $evento = $this->evento();
+
+        $this->preencher(Livewire::test('event-show', ['id' => $evento->id]))
+            ->call('salvarDados')
             ->assertForbidden();
 
         $this->assertSame(0, Registration::count());
@@ -55,16 +77,9 @@ class InscricaoEventoTest extends TestCase
     public function test_evento_encerrado_nao_aceita_inscricao(): void
     {
         $evento = $this->evento(['status' => 'closed']);
-        $igreja = Church::factory()->create();
 
-        Livewire::actingAs(User::factory()->create())
-            ->test('event-show', ['id' => $evento->id])
-            ->set('name', 'Fulano de Tal')
-            ->set('email', 'fulano@example.com')
-            ->set('phone', '84999999999')
-            ->set('church_id', $igreja->id)
-            ->set('receipt', $this->comprovante())
-            ->call('register')
+        $this->preencher(Livewire::actingAs(User::factory()->create())->test('event-show', ['id' => $evento->id]))
+            ->call('salvarDados')
             ->assertForbidden();
 
         $this->assertSame(0, Registration::count());
@@ -73,78 +88,36 @@ class InscricaoEventoTest extends TestCase
     public function test_evento_com_inscricao_ainda_por_abrir_nao_aceita_inscricao(): void
     {
         $evento = $this->evento(['opening_date' => now()->addWeek()]);
-        $igreja = Church::factory()->create();
 
-        Livewire::actingAs(User::factory()->create())
-            ->test('event-show', ['id' => $evento->id])
-            ->set('name', 'Fulano de Tal')
-            ->set('email', 'fulano@example.com')
-            ->set('phone', '84999999999')
-            ->set('church_id', $igreja->id)
-            ->set('receipt', $this->comprovante())
-            ->call('register')
+        $this->preencher(Livewire::actingAs(User::factory()->create())->test('event-show', ['id' => $evento->id]))
+            ->call('salvarDados')
             ->assertForbidden();
     }
 
-    public function test_nao_permite_duas_inscricoes_no_mesmo_evento(): void
-    {
-        Storage::fake(config('femopror.uploads.disk'));
+    // -------------------------------------------------- etapa 1: dados
 
-        $evento = $this->evento();
-        $igreja = Church::factory()->create();
+    public function test_ir_para_pagamento_salva_a_inscricao_antes_do_comprovante(): void
+    {
+        // A inscrição é salva ANTES do pagamento: pagar pelo celular é sair para
+        // o app do banco, e a aba pode morrer no caminho.
+        $evento = $this->evento(['price' => 40, 'requires_receipt' => true]);
         $user = User::factory()->create();
 
-        Registration::factory()->create([
-            'event_id' => $evento->id,
-            'user_id' => $user->id,
-            'church_id' => $igreja->id,
-        ]);
+        $this->preencher(Livewire::actingAs($user)->test('event-show', ['id' => $evento->id]))
+            ->call('salvarDados')
+            ->assertHasNoErrors()
+            ->assertSee('Sua vaga está reservada');
 
-        Livewire::actingAs($user)
-            ->test('event-show', ['id' => $evento->id])
-            ->set('name', 'Fulano de Tal')
-            ->set('email', 'fulano@example.com')
-            ->set('phone', '84999999999')
-            ->set('church_id', $igreja->id)
-            ->set('receipt', $this->comprovante())
-            ->call('register')
-            ->assertHasErrors('name');
+        $inscricao = Registration::sole();
 
-        $this->assertSame(1, Registration::count());
-    }
+        $this->assertSame($user->id, $inscricao->user_id);
+        $this->assertNull($inscricao->receipt_path);
+        $this->assertSame('pending', $inscricao->payment_status);
+        $this->assertSame('40.00', $inscricao->amount_paid);
+        $this->assertTrue($inscricao->isAwaitingReceipt());
 
-    public function test_evento_gratuito_nao_exige_comprovante(): void
-    {
-        Storage::fake(config('femopror.uploads.disk'));
-
-        $evento = $this->evento(['price' => 0, 'requires_receipt' => false]);
-        $igreja = Church::factory()->create();
-
-        Livewire::actingAs(User::factory()->create())
-            ->test('event-show', ['id' => $evento->id])
-            ->set('name', 'Fulano de Tal')
-            ->set('email', 'fulano@example.com')
-            ->set('phone', '84999999999')
-            ->set('church_id', $igreja->id)
-            ->call('register')
-            ->assertHasNoErrors();
-
-        $this->assertSame(1, Registration::count());
-        $this->assertSame('0.00', Registration::first()->amount_paid);
-    }
-
-    public function test_evento_pago_continua_exigindo_comprovante(): void
-    {
-        $evento = $this->evento(['price' => 50, 'requires_receipt' => true]);
-
-        Livewire::actingAs(User::factory()->create())
-            ->test('event-show', ['id' => $evento->id])
-            ->set('name', 'Fulano de Tal')
-            ->set('email', 'fulano@example.com')
-            ->set('phone', '84999999999')
-            ->set('church_id', Church::factory()->create()->id)
-            ->call('register')
-            ->assertHasErrors(['receipt' => 'required']);
+        // O e-mail de "recebemos" só sai com o comprovante.
+        Mail::assertNothingSent();
     }
 
     public function test_erros_de_validacao_aparecem_para_nome_email_e_igreja(): void
@@ -157,8 +130,22 @@ class InscricaoEventoTest extends TestCase
             ->set('email', 'não-é-email')
             ->set('phone', '123')
             ->set('church_id', '')
-            ->call('register')
+            ->call('salvarDados')
             ->assertHasErrors(['name', 'email', 'phone', 'church_id']);
+
+        $this->assertSame(0, Registration::count());
+    }
+
+    public function test_telefone_com_mascara_e_gravado_so_com_digitos(): void
+    {
+        $evento = $this->evento();
+
+        $this->preencher(Livewire::actingAs(User::factory()->create())->test('event-show', ['id' => $evento->id]))
+            ->set('phone', '(84) 99135-0289')
+            ->call('salvarDados')
+            ->assertHasNoErrors();
+
+        $this->assertSame('84991350289', Registration::sole()->phone);
     }
 
     public function test_preco_soma_o_adicional_da_opcao_escolhida(): void
@@ -184,8 +171,6 @@ class InscricaoEventoTest extends TestCase
 
     public function test_resposta_forjada_nao_muda_o_preco_nem_e_gravada(): void
     {
-        Storage::fake(config('femopror.uploads.disk'));
-
         // O acréscimo saía de um regex sobre a string devolvida pelo cliente:
         // bastava mandar um rótulo inventado para pagar menos.
         $evento = $this->evento([
@@ -195,24 +180,16 @@ class InscricaoEventoTest extends TestCase
             ],
         ]);
 
-        $componente = Livewire::actingAs(User::factory()->create())
-            ->test('event-show', ['id' => $evento->id]);
-
         $chave = $evento->customFieldDefinitions()[0]['key'];
 
-        $componente->set("respostas.$chave", 'Camisa de graça (+0,00)');
+        $componente = Livewire::actingAs(User::factory()->create())
+            ->test('event-show', ['id' => $evento->id])
+            ->set("respostas.$chave", 'Camisa de graça (+0,00)');
 
-        // O total ignora o que não está no cadastro do evento...
         $this->assertSame(100.0, $componente->instance()->precoFinal);
 
-        // ...e a gravação é recusada.
-        $componente
-            ->set('name', 'Fulano de Tal')
-            ->set('email', 'fulano@example.com')
-            ->set('phone', '84999999999')
-            ->set('church_id', Church::factory()->create()->id)
-            ->set('receipt', $this->comprovante())
-            ->call('register')
+        $this->preencher($componente)
+            ->call('salvarDados')
             ->assertHasErrors("respostas.$chave");
 
         $this->assertSame(0, Registration::count());
@@ -220,70 +197,151 @@ class InscricaoEventoTest extends TestCase
 
     public function test_valor_cobrado_fica_congelado_na_inscricao(): void
     {
-        Storage::fake(config('femopror.uploads.disk'));
+        $evento = $this->evento(['price' => 75]);
 
-        $evento = $this->evento(['price' => 75, 'requires_receipt' => true]);
-
-        Livewire::actingAs(User::factory()->create())
-            ->test('event-show', ['id' => $evento->id])
-            ->set('name', 'Fulano de Tal')
-            ->set('email', 'fulano@example.com')
-            ->set('phone', '(84) 99999-9999')
-            ->set('church_id', Church::factory()->create()->id)
-            ->set('receipt', $this->comprovante())
-            ->call('register')
+        $this->preencher(Livewire::actingAs(User::factory()->create())->test('event-show', ['id' => $evento->id]))
+            ->call('salvarDados')
             ->assertHasNoErrors();
 
-        $inscricao = Registration::first();
-
+        $inscricao = Registration::sole();
         $this->assertSame('75.00', $inscricao->amount_paid);
+
         // Reajustar o evento depois não mexe no que foi cobrado.
         $evento->update(['price' => 120]);
         $this->assertSame('75.00', $inscricao->fresh()->amount_paid);
     }
 
-    public function test_telefone_com_mascara_e_gravado_so_com_digitos(): void
+    public function test_pergunta_com_ponto_no_texto_nao_quebra_o_formulario(): void
     {
-        Storage::fake(config('femopror.uploads.disk'));
+        $evento = $this->evento([
+            'custom_fields' => [
+                ['question' => 'Tem restrição alimentar? Ex.: sim, não.', 'type' => 'text'],
+            ],
+        ]);
 
-        $evento = $this->evento();
+        $this->assertStringNotContainsString('.', $evento->customFieldDefinitions()[0]['key']);
 
         Livewire::actingAs(User::factory()->create())
             ->test('event-show', ['id' => $evento->id])
-            ->set('name', 'Fulano de Tal')
-            ->set('email', 'fulano@example.com')
-            ->set('phone', '(84) 99135-0289')
-            ->set('church_id', Church::factory()->create()->id)
+            ->assertOk();
+    }
+
+    public function test_evento_gratuito_conclui_sem_etapa_de_pagamento(): void
+    {
+        $evento = $this->evento(['price' => 0, 'requires_receipt' => true]);
+
+        $this->preencher(Livewire::actingAs(User::factory()->create())->test('event-show', ['id' => $evento->id]))
+            ->call('salvarDados')
+            ->assertHasNoErrors()
+            ->assertDontSee('Sua vaga está reservada');
+
+        $inscricao = Registration::sole();
+
+        $this->assertSame('0.00', $inscricao->amount_paid);
+        $this->assertFalse($inscricao->isAwaitingReceipt());
+        $this->assertSame('gratuita', $inscricao->statusKey());
+
+        // Sem nada a pagar, o resumo sai já na etapa 1.
+        Mail::assertSent(InscricaoRecebida::class);
+    }
+
+    // ------------------------------------------------ voltar e alterar
+
+    public function test_alterar_dados_atualiza_a_mesma_inscricao(): void
+    {
+        $evento = $this->evento([
+            'price' => 40,
+            'custom_fields' => [
+                ['question' => 'Modalidades', 'type' => 'checkbox', 'options' => 'Futsal (+5,00), Vôlei (+5,00)'],
+            ],
+        ]);
+
+        $chave = $evento->customFieldDefinitions()[0]['key'];
+
+        $componente = $this->preencher(Livewire::actingAs(User::factory()->create())->test('event-show', ['id' => $evento->id]))
+            ->set("respostas.$chave", ['Futsal (+5,00)'])
+            ->call('salvarDados');
+
+        $this->assertSame('45.00', Registration::sole()->amount_paid);
+
+        $componente
+            ->call('alterarDados')
+            ->assertSet('editando', true)
+            ->set("respostas.$chave", ['Futsal (+5,00)', 'Vôlei (+5,00)'])
+            ->call('salvarDados')
+            ->assertHasNoErrors()
+            ->assertSet('editando', false);
+
+        // Mesma inscrição, valor e respostas novos — nada de linha duplicada.
+        $inscricao = Registration::sole();
+        $this->assertSame('50.00', $inscricao->amount_paid);
+        $this->assertSame(['Futsal (+5,00)', 'Vôlei (+5,00)'], $inscricao->custom_answers['Modalidades']);
+    }
+
+    public function test_nao_altera_dados_depois_de_enviar_comprovante(): void
+    {
+        // Depois do comprovante, mudar a modalidade mudaria o valor de um PIX já pago.
+        $evento = $this->evento(['price' => 40, 'requires_receipt' => true]);
+
+        $componente = $this->preencher(Livewire::actingAs(User::factory()->create())->test('event-show', ['id' => $evento->id]))
+            ->call('salvarDados')
             ->set('receipt', $this->comprovante())
-            ->call('register')
+            ->call('enviarComprovante')
             ->assertHasNoErrors();
 
-        $this->assertSame('84991350289', Registration::first()->phone);
+        $componente->call('alterarDados')->assertForbidden();
+    }
+
+    public function test_nao_permite_segunda_inscricao_depois_de_concluida(): void
+    {
+        $evento = $this->evento();
+        $user = User::factory()->create();
+
+        Registration::factory()->create([
+            'event_id' => $evento->id,
+            'user_id' => $user->id,
+            'receipt_path' => 'receipts/ja-enviado.jpg',
+        ]);
+
+        // Forçando a etapa 1 por request, mesmo com a tela mostrando "já inscrito".
+        $this->preencher(Livewire::actingAs($user)->test('event-show', ['id' => $evento->id]))
+            ->set('editando', true)
+            ->call('salvarDados')
+            ->assertHasErrors('name');
+
+        $this->assertSame(1, Registration::count());
+    }
+
+    // ------------------------------------------- etapa 2: comprovante
+
+    public function test_evento_pago_exige_comprovante_para_finalizar(): void
+    {
+        $evento = $this->evento(['price' => 50, 'requires_receipt' => true]);
+
+        $this->preencher(Livewire::actingAs(User::factory()->create())->test('event-show', ['id' => $evento->id]))
+            ->call('salvarDados')
+            ->call('enviarComprovante')
+            ->assertHasErrors(['receipt' => 'required']);
+
+        $this->assertNull(Registration::sole()->receipt_path);
     }
 
     public function test_comprovante_vai_para_o_disco_privado(): void
     {
-        Storage::fake(config('femopror.uploads.disk'));
         Storage::fake('public');
 
         $evento = $this->evento();
 
-        Livewire::actingAs(User::factory()->create())
-            ->test('event-show', ['id' => $evento->id])
-            ->set('name', 'Fulano de Tal')
-            ->set('email', 'fulano@example.com')
-            ->set('phone', '84999999999')
-            ->set('church_id', Church::factory()->create()->id)
+        $this->preencher(Livewire::actingAs(User::factory()->create())->test('event-show', ['id' => $evento->id]))
+            ->call('salvarDados')
             ->set('receipt', $this->comprovante())
-            ->call('register')
+            ->call('enviarComprovante')
             ->assertHasNoErrors();
 
-        $caminho = Registration::first()->receipt_path;
+        $caminho = Registration::sole()->receipt_path;
         $disco = config('femopror.uploads.disk');
 
-        // O disco de upload é configurável (`local` em dev, `r2` em produção).
-        // O que o teste garante é o que não pode mudar: o comprovante vai para
-        // o disco configurado e NUNCA para o público.
+        // O que não pode mudar: vai para o disco configurado e NUNCA para o público.
         Storage::disk($disco)->assertExists($caminho);
         Storage::disk('public')->assertMissing($caminho);
 
@@ -291,22 +349,76 @@ class InscricaoEventoTest extends TestCase
         $this->assertNotSame('public', config("filesystems.disks.{$disco}.visibility", 'private'));
     }
 
-    public function test_pergunta_com_ponto_no_texto_nao_quebra_o_formulario(): void
+    public function test_quem_fecha_a_aba_retoma_direto_no_pagamento(): void
     {
-        // A resposta era indexada pelo texto da pergunta no wire:model, e o
-        // ponto virava aninhamento de array.
-        $evento = $this->evento([
-            'custom_fields' => [
-                ['question' => 'Tem restrição alimentar? Ex.: sim, não.', 'type' => 'text'],
-            ],
-        ]);
+        // O cenário que motivou salvar antes de pagar: a pessoa salva os dados,
+        // sai para o app do banco, e a aba morre. Reabrindo a página, ela tem
+        // que cair no pagamento — não num formulário vazio.
+        $evento = $this->evento(['price' => 40, 'requires_receipt' => true]);
+        $user = User::factory()->create();
 
-        $definicao = $evento->customFieldDefinitions()[0];
+        $this->preencher(Livewire::actingAs($user)->test('event-show', ['id' => $evento->id]))
+            ->call('salvarDados');
 
-        $this->assertStringNotContainsString('.', $definicao['key']);
+        // Página nova, componente novo.
+        Livewire::actingAs($user)
+            ->test('event-show', ['id' => $evento->id])
+            ->assertSee('Sua vaga está reservada')
+            ->assertSee('Finalizar inscrição')
+            ->set('receipt', $this->comprovante())
+            ->call('enviarComprovante')
+            ->assertHasNoErrors();
+
+        $this->assertNotNull(Registration::sole()->receipt_path);
+        Mail::assertSent(InscricaoRecebida::class);
+    }
+
+    public function test_comprovante_ainda_pode_ser_enviado_depois_que_as_inscricoes_fecham(): void
+    {
+        // Salvou com inscrições abertas e foi pagar; elas fecharam nesse meio-tempo.
+        $evento = $this->evento(['price' => 40, 'requires_receipt' => true]);
+        $user = User::factory()->create();
+
+        $this->preencher(Livewire::actingAs($user)->test('event-show', ['id' => $evento->id]))
+            ->call('salvarDados');
+
+        $evento->update(['status' => 'closed']);
+
+        Livewire::actingAs($user)
+            ->test('event-show', ['id' => $evento->id])
+            ->set('receipt', $this->comprovante())
+            ->call('enviarComprovante')
+            ->assertHasNoErrors();
+
+        $this->assertNotNull(Registration::sole()->receipt_path);
+    }
+
+    public function test_enviar_comprovante_sem_inscricao_salva_e_recusado(): void
+    {
+        $evento = $this->evento();
 
         Livewire::actingAs(User::factory()->create())
             ->test('event-show', ['id' => $evento->id])
-            ->assertOk();
+            ->set('receipt', $this->comprovante())
+            ->call('enviarComprovante')
+            ->assertForbidden();
+    }
+
+    public function test_nao_da_para_anexar_comprovante_na_inscricao_de_outra_pessoa(): void
+    {
+        $evento = $this->evento(['price' => 40, 'requires_receipt' => true]);
+        $dona = User::factory()->create();
+
+        $this->preencher(Livewire::actingAs($dona)->test('event-show', ['id' => $evento->id]))
+            ->call('salvarDados');
+
+        // A inscrição é sempre buscada pelo usuário autenticado: não há id para forjar.
+        Livewire::actingAs(User::factory()->create())
+            ->test('event-show', ['id' => $evento->id])
+            ->set('receipt', $this->comprovante())
+            ->call('enviarComprovante')
+            ->assertForbidden();
+
+        $this->assertNull(Registration::sole()->receipt_path);
     }
 }

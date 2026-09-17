@@ -91,10 +91,14 @@ class Event extends Model
     /**
      * Comprovante só é exigido quando a inscrição custa alguma coisa. Evento
      * gratuito pedindo PIX era um beco sem saída no formulário.
+     *
+     * A pergunta é sobre o valor DA INSCRIÇÃO, não o preço base do evento: um
+     * evento de base gratuita pode cobrar pelas modalidades escolhidas, e aí
+     * o comprovante passa a valer.
      */
-    public function requiresReceipt(): bool
+    public function requiresReceiptFor(float $valor): bool
     {
-        return $this->requires_receipt && ! $this->isFree();
+        return $this->requires_receipt && $valor > 0;
     }
 
     /**
