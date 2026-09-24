@@ -279,7 +279,9 @@ new #[Layout('layouts.public')] class extends Component {
         }
 
         $this->validate([
-            'receipt' => ['required', 'file', 'mimes:jpg,jpeg,png,pdf', 'max:'.UploadLimit::maxKilobytes()],
+            // heic/heif entram porque é o formato padrão da câmera do iPhone:
+            // sem eles, metade do público não conseguia mandar a própria foto.
+            'receipt' => ['required', 'file', 'mimes:jpg,jpeg,png,pdf,heic,heif', 'max:'.UploadLimit::maxKilobytes()],
         ], $this->mensagens());
 
         RateLimiter::hit($this->chaveDoLimite(), 300);
@@ -482,7 +484,7 @@ new #[Layout('layouts.public')] class extends Component {
             'church_id.exists' => 'Selecione uma igreja da lista.',
             'receipt.required' => 'Anexe o comprovante do PIX para finalizar.',
             // Vários bancos compartilham o comprovante como PDF, não como imagem.
-            'receipt.mimes' => 'O comprovante precisa ser uma imagem (PNG ou JPG) ou um PDF.',
+            'receipt.mimes' => 'O comprovante precisa ser uma foto (JPG, PNG ou HEIC) ou um PDF.',
             'receipt.max' => 'A imagem do comprovante passa de '.UploadLimit::label().'. Tire um print menor ou reduza a foto.',
         ];
 
@@ -675,43 +677,7 @@ new #[Layout('layouts.public')] class extends Component {
                             </div>
 
                             <form wire:submit.prevent="enviarComprovante" class="mt-5 space-y-4">
-                                {{-- Arquivo maior que o teto do PHP é descartado ANTES do Laravel:
-                                     a requisição chega vazia e não há validação que pegue. O
-                                     resultado era um spinner parado. Esta checagem avisa na hora. --}}
-                                <div x-data="{
-                                        maxBytes: {{ UploadLimit::maxBytes() }},
-                                        grande: false,
-                                        conferir(evento) {
-                                            const arquivo = evento.target.files[0]
-                                            this.grande = !! arquivo && arquivo.size > this.maxBytes
-                                            if (this.grande) evento.target.value = ''
-                                        }
-                                     }"
-                                     class="relative rounded-xl border-2 border-dashed bg-gray-50 p-4 text-center"
-                                     :class="grande ? 'border-red-300' : '@error('receipt') border-red-300 @else border-gray-200 @enderror'">
-                                    <label class="block cursor-pointer">
-                                        <svg class="mx-auto mb-2 h-8 w-8 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v1m-4-8l-4-4m0 0L8 8m4-4v12"></path></svg>
-                                        <span class="block text-xs font-semibold text-green-900">Anexar comprovante do PIX</span>
-                                        <span class="text-[10px] text-gray-400">PNG, JPG ou PDF, até {{ UploadLimit::label() }}</span>
-                                        {{-- Banco costuma compartilhar o comprovante em PDF. --}}
-                                        <input type="file" wire:model="receipt" @change="conferir($event)" class="sr-only" accept="image/png,image/jpeg,application/pdf">
-                                    </label>
-
-                                    <div x-show="grande" x-cloak class="mt-2 text-xs font-medium text-red-600">
-                                        Essa imagem passa de {{ UploadLimit::label() }}. Tire um print da tela do banco
-                                        em vez da foto, ou reduza a imagem antes de anexar.
-                                    </div>
-
-                                    @if ($receipt)
-                                        <div x-show="! grande" class="mt-2 flex items-center justify-center gap-1 text-xs font-bold text-green-700">
-                                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>
-                                            Arquivo carregado!
-                                        </div>
-                                    @endif
-
-                                    <div wire:loading wire:target="receipt" class="mt-2 text-xs font-semibold text-gray-500">Enviando arquivo...</div>
-                                    @error('receipt') <span class="mt-1 block text-left text-xs font-medium text-red-600">{{ $message }}</span> @enderror
-                                </div>
+                                <x-campo-comprovante :tem-arquivo="(bool) $receipt" />
 
                                 <button type="submit" wire:loading.attr="disabled" wire:target="enviarComprovante,receipt"
                                         class="flex w-full items-center justify-center gap-2 rounded-xl bg-green-900 py-3 font-bold text-white shadow-md transition hover:bg-green-800 disabled:opacity-50">
@@ -763,7 +729,27 @@ new #[Layout('layouts.public')] class extends Component {
                                 @endswitch
                             </p>
 
-                            {{-- Evento pago que não exige comprovante: a pessoa ainda precisa ver como pagar. --}}
+                            {{-- Quem volta ao evento já inscrito precisa ver, de cara, em que pé
+                                 está — não só "você está inscrito". O índice único
+                                 (event_id, user_id) impede a segunda inscrição no banco; esta
+                                 tela é o que explica para a pessoa por que não dá. --}}
+                            @php($cor = $inscricao->statusColor())
+                            <div class="mx-auto mb-6 flex flex-col items-center gap-2">
+                                <span @class([
+                                    'inline-block rounded-lg px-3.5 py-1.5 text-sm font-semibold',
+                                    'bg-green-50 text-green-800' => $cor === 'success',
+                                    'bg-blue-50 text-blue-800' => $cor === 'info',
+                                    'bg-amber-50 text-amber-800' => $cor === 'warning',
+                                    'bg-red-50 text-red-700' => $cor === 'danger',
+                                ])>
+                                    {{ $inscricao->statusLabel() }}
+                                </span>
+
+                                <a href="{{ route('dashboard') }}" class="text-xs font-semibold text-green-900 underline underline-offset-2 hover:text-green-700">
+                                    Veja mais detalhes em Minhas inscrições →
+                                </a>
+                            </div>
+
                             @if($status === 'aguardando_pagamento' && $this->pixCopiaCola !== '')
                                 <div class="mb-6 rounded-xl border border-gray-200 p-4" x-data="{ copiado: false }">
                                     <p class="mb-2 text-xs font-bold uppercase tracking-wider text-green-900">
@@ -829,34 +815,7 @@ new #[Layout('layouts.public')] class extends Component {
                                             </button>
                                         @else
                                             <form wire:submit.prevent="enviarComprovante" class="mt-4 space-y-3">
-                                                <div x-data="{
-                                                        maxBytes: {{ UploadLimit::maxBytes() }},
-                                                        grande: false,
-                                                        conferir(evento) {
-                                                            const arquivo = evento.target.files[0]
-                                                            this.grande = !! arquivo && arquivo.size > this.maxBytes
-                                                            if (this.grande) evento.target.value = ''
-                                                        }
-                                                     }"
-                                                     class="rounded-xl border-2 border-dashed bg-gray-50 p-4 text-center"
-                                                     :class="grande ? 'border-red-300' : '@error('receipt') border-red-300 @else border-gray-200 @enderror'">
-                                                    <label class="block cursor-pointer">
-                                                        <span class="block text-xs font-semibold text-green-900">Escolher o arquivo certo</span>
-                                                        <span class="text-[10px] text-gray-400">PNG, JPG ou PDF, até {{ UploadLimit::label() }}</span>
-                                                        <input type="file" wire:model="receipt" @change="conferir($event)" class="sr-only" accept="image/png,image/jpeg,application/pdf">
-                                                    </label>
-
-                                                    <div x-show="grande" x-cloak class="mt-2 text-xs font-medium text-red-600">
-                                                        Esse arquivo passa de {{ UploadLimit::label() }}.
-                                                    </div>
-
-                                                    @if ($receipt)
-                                                        <div x-show="! grande" class="mt-2 text-xs font-bold text-green-700">Arquivo carregado!</div>
-                                                    @endif
-
-                                                    <div wire:loading wire:target="receipt" class="mt-2 text-xs font-semibold text-gray-500">Enviando arquivo...</div>
-                                                    @error('receipt') <span class="mt-1 block text-left text-xs font-medium text-red-600">{{ $message }}</span> @enderror
-                                                </div>
+                                                <x-campo-comprovante :tem-arquivo="(bool) $receipt" titulo="Escolher o arquivo certo" />
 
                                                 <div class="flex gap-2">
                                                     <button type="submit" wire:loading.attr="disabled" wire:target="enviarComprovante,receipt"

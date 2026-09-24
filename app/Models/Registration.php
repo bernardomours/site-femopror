@@ -149,6 +149,16 @@ class Registration extends Model
     }
 
     /**
+     * Foto da câmera do iPhone. O arquivo é aceito, mas Chrome e Edge no
+     * Windows não exibem HEIC — quem confere precisa baixar e abrir no
+     * visualizador de fotos, então a tela avisa em vez de só "não abriu".
+     */
+    public function receiptIsHeic(): bool
+    {
+        return (bool) preg_match('/\.(heic|heif)$/i', (string) $this->receipt_path);
+    }
+
+    /**
      * Link temporário para o próprio participante conferir o que enviou.
      *
      * O comprovante mora em disco privado: sem isto, quem mandou o arquivo

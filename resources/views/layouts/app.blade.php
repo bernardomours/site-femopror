@@ -13,6 +13,14 @@
         <link href="https://fonts.bunny.net/css?family=figtree:400,500,600,700&display=swap" rel="stylesheet" />
 
         @vite(['resources/css/app.css', 'resources/js/app.js'])
+
+        {{--
+            O Alpine desta página vem daqui. Esta tela não tem componente
+            Livewire, mas o menu e os modais usam `x-data` — sem o script do
+            Livewire não haveria Alpine nenhum. É também o que garante uma
+            instância só: ver o comentário em `resources/js/app.js`.
+        --}}
+        @livewireScripts
     </head>
     <body class="font-sans antialiased">
         <div class="min-h-screen bg-gray-50">

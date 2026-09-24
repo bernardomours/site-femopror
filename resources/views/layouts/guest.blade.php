@@ -15,6 +15,9 @@
         <link href="https://fonts.bunny.net/css?family=figtree:400,500,600,700&display=swap" rel="stylesheet" />
 
         @vite(['resources/css/app.css', 'resources/js/app.js'])
+
+        {{-- Única fonte de Alpine no app — ver `resources/js/app.js`. --}}
+        @livewireScripts
     </head>
 
     {{--

@@ -88,9 +88,15 @@ class RegistrationsTable
             ], layout: FiltersLayout::AboveContent)
             ->recordActions([
                 Action::make('ver_comprovante')
-                    ->label('Ver PIX')
-                    ->icon('heroicon-o-eye')
-                    ->color('info')
+                    // HEIC é foto de iPhone: Chrome e Edge no Windows não exibem,
+                    // e sem isso o arquivo parecia corrompido em vez de "baixe e
+                    // abra no visualizador de fotos".
+                    ->label(fn ($record) => $record->receiptIsHeic() ? 'Baixar PIX (HEIC)' : 'Ver PIX')
+                    ->icon(fn ($record) => $record->receiptIsHeic() ? 'heroicon-o-arrow-down-tray' : 'heroicon-o-eye')
+                    ->color(fn ($record) => $record->receiptIsHeic() ? 'warning' : 'info')
+                    ->tooltip(fn ($record) => $record->receiptIsHeic()
+                        ? 'Foto de iPhone (HEIC). O navegador não abre: baixe e abra no visualizador de fotos do computador.'
+                        : null)
                     // Era asset('storage/...'), um endereço público e permanente
                     // para um comprovante bancário. Agora é um link assinado que
                     // vale 30 minutos.

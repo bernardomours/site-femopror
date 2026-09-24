@@ -17,7 +17,29 @@ class AppServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
-        //
+        $this->pinLivewireTemporaryUploadDisk();
+    }
+
+    /**
+     * O arquivo em trânsito fica no disco local, nunca no bucket.
+     *
+     * O Livewire olha `filesystems.default` para decidir onde guardar o upload
+     * temporário. Se isso apontar para um disco `s3` (o nosso R2), ele troca de
+     * estratégia: o navegador passa a enviar o arquivo DIRETO para o bucket, por
+     * URL pré-assinada. E aí o upload só funciona com CORS configurado no bucket
+     * — que o R2 não traz por padrão. O navegador bloqueia o envio em silêncio, e
+     * para quem está usando o sintoma é exatamente "escolhi o arquivo e não
+     * aconteceu nada".
+     *
+     * Fixar em `local` remove essa dependência: o arquivo chega ao servidor pelo
+     * mesmo caminho em desenvolvimento e em produção, e só vai para o R2 depois,
+     * no `store()`, já pelo backend. O temporário é apagado pelo próprio Livewire.
+     */
+    private function pinLivewireTemporaryUploadDisk(): void
+    {
+        config([
+            'livewire.temporary_file_upload.disk' => env('LIVEWIRE_TEMPORARY_FILE_UPLOAD_DISK', 'local'),
+        ]);
     }
 
     /**

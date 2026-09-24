@@ -408,6 +408,7 @@ congresso.
 | `PainelParticipanteTest` | dashboard de delegado (regressão do 500), vínculo sobrevivendo à troca de e-mail, delegação amarrada no cadastro, isolamento entre participantes |
 | `PaginaInicialTest` | home responde, rascunho escondido, ícone inválido não derruba a página, diretoria ativa, ordenação das igrejas, meta de compartilhamento |
 | `PerfilTest` | igreja e telefone gravados e normalizados, opcionais, validação, prefill da inscrição, perfil completado sem sobrescrever |
+| `UploadDeComprovanteTest` | as causas do "escolhi o arquivo e não aconteceu nada": arquivo em trânsito nunca indo direto para o bucket (mesmo com `filesystems.default` em `s3`), upload funcionando nessa configuração de produção, HEIC do iPhone aceito, arquivo acima do limite do servidor recusado com mensagem, a tela escutando o erro de upload; mais a mensagem de inscrição duplicada com status e link, e os dois botões de envio dentro de um `<form>` (varredura do HTML com `DOMXPath`) |
 | `TrocaDeComprovanteTest` | PDF aceito e tipo proibido recusado, participante abrindo o próprio comprovante, troca substituindo e apagando o arquivo antigo, sem reenviar e-mail e sem mexer no valor, troca barrada depois da confirmação (inclusive quando a confirmação acontece no meio) e na inscrição de outra pessoa |
 | `AuditoriaSegurancaTest` | as quatro frentes: tetos de requisição (e a checagem de que as rotas sensíveis declaram `throttle`), payload de SQL sobrevivendo como texto, cada área restrita recusando usuário comum e visitante, arquivo privado só com assinatura válida, HTML sem dados de outro participante, e o inventário de propriedades públicas do componente de inscrição |
 | `FluxoInscricaoCopaTest` | o caminho inteiro de um evento avulso: os dois botões para quem está deslogado, criar conta e voltar para o evento, entrar e voltar, alternar sem perder o destino, open redirect recusado, esportes somando no valor, QR cobrando o valor salvo e acompanhando a alteração, comprovante no disco privado, e-mail só depois do comprovante, falha de SMTP não derrubando a inscrição |
@@ -462,6 +463,54 @@ não repita a lógica de borda vermelha em cada formulário.
 - **`explode(',')` em lista com valor monetário** quebra no separador decimal.
 - **Migration com `down()` vazio** não dá rollback e quebra o re-run. Uma já foi corrigida
   por migration nova (editar a original não teria efeito: ela já rodou em produção).
+- **Upload do Livewire falha em silêncio se ninguém escutar `livewire-upload-error`.** Todo
+  problema de envio (rede, CORS, 413, sessão expirada) vira "escolhi o arquivo e não aconteceu
+  nada" — o pior relato possível, porque não dá pista nenhuma. O `<x-campo-comprovante>`
+  escuta os eventos `livewire-upload-error/start/finish/progress` e mostra mensagem e barra de
+  progresso. Campo de arquivo novo precisa usar esse componente, não um `<input>` solto.
+
+- **…e escutar `livewire-upload-error` ainda não basta.** Quando o endpoint de upload responde
+  **HTML em vez de JSON** — arquivo acima do `post_max_size`, sessão expirada (419), redirect
+  de login, CORS, 500 — o Livewire quebra no `JSON.parse` *dentro da própria promise*:
+  `SyntaxError: Unexpected token '<'`. Nenhum callback de erro roda e **nenhum evento é
+  disparado**. Reproduzido com `$wire.upload()` chamado na mão: três tentativas seguidas,
+  todas sem retorno. Por isso o `<x-campo-comprovante>` tem um **vigia de travamento** —
+  se o progresso parar de andar por 20s, ele assume travado e mostra mensagem. A conta é
+  sobre a última notícia recebida, não sobre o tempo total: num 4G ruim, envio demorado é
+  normal e não pode virar erro.
+
+- **Botão de envio fora do `<form>` não faz nada.** `<button type="submit">` só dispara
+  `wire:submit` de dentro do formulário que tem a diretiva; solto, o clique não gera request,
+  não valida, não mostra mensagem — o mesmo sintoma de silêncio, agora no botão. Nenhum teste
+  pegava, porque `Livewire::test()` chama os métodos direto e nunca passa pelo DOM: o
+  componente respondia certo enquanto a tela estava quebrada. `UploadDeComprovanteTest` agora
+  varre o HTML renderizado com `DOMXPath` e falha se algum botão de envio estiver sem
+  `ancestor::form`. **Nunca edite Blade por faixa de linha (`sed -i '679s|...'`)** — foi assim
+  que a tag sumiu.
+
+- **Alpine rodando duas vezes.** O Livewire 4 (que entra pelo Filament) traz e inicia o
+  próprio Alpine. O `resources/js/app.js` também importava e dava `Alpine.start()`: duas
+  instâncias sobre o mesmo DOM, com o aviso "Detected multiple instances of Alpine running" no
+  console e cada `x-data` sujeito a inicializar duas vezes, com dois estados independentes. O
+  Alpine agora vem **só do Livewire**, e por isso **todo layout carrega `@livewireScripts`** —
+  inclusive `app` e `guest`, que não têm componente Livewire nenhum mas usam `x-data` no menu
+  e nos modais (sem o script ficariam sem Alpine algum). De quebra, o bundle do `app.js` caiu
+  para 0 kB. Para registrar plugin Alpine, use `document.addEventListener('livewire:init', …)`.
+
+- **`php artisan serve` no Windows quebra upload — e não é bug do app.** O processo filho
+  recebe um ambiente filtrado, sem `TMP`/`TEMP`; o PHP então não acha onde criar o arquivo
+  temporário e descarta o upload **no startup da request**, antes do Laravel bootar
+  (`PHP Warning: File upload error - unable to create a temporary file`). `$_FILES` chega
+  vazio e o endpoint devolve HTML → cai na armadilha do `JSON.parse` acima. Use o Herd
+  (`site-femopror.test`) ou suba o servidor embutido direto, herdando o ambiente:
+  `cd public && php -S 127.0.0.1:8130 vendor/laravel/framework/src/Illuminate/Foundation/resources/server.php`.
+- **Disco temporário do Livewire NÃO pode ser o bucket.** Ele decide a estratégia por
+  `filesystems.default`: sendo `s3`, o navegador envia direto para o bucket por URL
+  pré-assinada — e aí o upload exige CORS no R2, que não vem configurado. Fixado em `local`
+  por `AppServiceProvider::pinLivewireTemporaryUploadDisk()`, para a decisão não depender do
+  `.env` de produção. Coberto por `UploadDeComprovanteTest`.
+- **Foto de iPhone é HEIC.** Com `accept` e `mimes` só de jpg/png/pdf, boa parte do público
+  não conseguia mandar a própria foto. `heic`/`heif` entram nos dois lugares.
 - **Arquivo maior que `upload_max_filesize` some sem erro.** O PHP descarta a requisição
   antes de o Laravel existir: não há validação que pegue, e a pessoa fica olhando o spinner.
   Foto de celular passa de 2 MB com frequência. Por isso `App\Support\UploadLimit` calcula o
