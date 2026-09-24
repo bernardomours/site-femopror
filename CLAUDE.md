@@ -408,7 +408,7 @@ congresso.
 | `PainelParticipanteTest` | dashboard de delegado (regressão do 500), vínculo sobrevivendo à troca de e-mail, delegação amarrada no cadastro, isolamento entre participantes |
 | `PaginaInicialTest` | home responde, rascunho escondido, ícone inválido não derruba a página, diretoria ativa, ordenação das igrejas, meta de compartilhamento |
 | `PerfilTest` | igreja e telefone gravados e normalizados, opcionais, validação, prefill da inscrição, perfil completado sem sobrescrever |
-| `UploadDeComprovanteTest` | as causas do "escolhi o arquivo e não aconteceu nada": arquivo em trânsito nunca indo direto para o bucket (mesmo com `filesystems.default` em `s3`), upload funcionando nessa configuração de produção, HEIC do iPhone aceito, arquivo acima do limite do servidor recusado com mensagem, a tela escutando o erro de upload; mais a mensagem de inscrição duplicada com status e link, e os dois botões de envio dentro de um `<form>` (varredura do HTML com `DOMXPath`) |
+| `UploadDeComprovanteTest` | as causas do "escolhi o arquivo e não aconteceu nada": arquivo em trânsito nunca indo direto para o bucket (mesmo com `filesystems.default` em `s3`), upload funcionando nessa configuração de produção, HEIC do iPhone aceito, arquivo acima do limite do servidor recusado com mensagem, a tela escutando o erro de upload; mais a mensagem de inscrição duplicada com status e link, os dois botões de envio dentro de um `<form>` e o código do Alpine não vazando como texto na tela (varredura do HTML com `DOMXPath`) |
 | `TrocaDeComprovanteTest` | PDF aceito e tipo proibido recusado, participante abrindo o próprio comprovante, troca substituindo e apagando o arquivo antigo, sem reenviar e-mail e sem mexer no valor, troca barrada depois da confirmação (inclusive quando a confirmação acontece no meio) e na inscrição de outra pessoa |
 | `AuditoriaSegurancaTest` | as quatro frentes: tetos de requisição (e a checagem de que as rotas sensíveis declaram `throttle`), payload de SQL sobrevivendo como texto, cada área restrita recusando usuário comum e visitante, arquivo privado só com assinatura válida, HTML sem dados de outro participante, e o inventário de propriedades públicas do componente de inscrição |
 | `FluxoInscricaoCopaTest` | o caminho inteiro de um evento avulso: os dois botões para quem está deslogado, criar conta e voltar para o evento, entrar e voltar, alternar sem perder o destino, open redirect recusado, esportes somando no valor, QR cobrando o valor salvo e acompanhando a alteração, comprovante no disco privado, e-mail só depois do comprovante, falha de SMTP não derrubando a inscrição |
@@ -478,6 +478,20 @@ não repita a lógica de borda vermelha em cada formulário.
   se o progresso parar de andar por 20s, ele assume travado e mostra mensagem. A conta é
   sobre a última notícia recebida, não sobre o tempo total: num 4G ruim, envio demorado é
   normal e não pode virar erro.
+
+- **Uma aspa dupla dentro de `x-data="{ … }"` derruba a tela.** O bloco inteiro é o *valor* de
+  um atributo delimitado por aspas duplas: a primeira aspa dupla lá dentro encerra o atributo,
+  e todo o resto do JavaScript é renderizado **como texto**, por cima do QR Code do PIX. Vale
+  inclusive para comentário — foi num `/* … */` que aconteceu. Use aspas simples ou crase,
+  sempre. A suíte passava inteira com a tela nesse estado, porque os testes conferiam que
+  certos trechos existem no HTML e eles continuavam existindo, só que como texto em vez de
+  comportamento. `UploadDeComprovanteTest` agora compara o **texto visível** (DOM sem
+  `<script>`) contra fragmentos de JS.
+
+  > Ao inspecionar HTML com `DOMDocument` em teste, troque `@click=` por outro nome antes: `@`
+  > não é começo válido de nome de atributo para o libxml, que erra a leitura da tag e deixa o
+  > `>` de uma arrow function (`() =>`) fechá-la no meio. O parser então acusa vazamento numa
+  > página correta. `UploadDeComprovanteTest::documento()` faz essa normalização.
 
 - **Botão de envio fora do `<form>` não faz nada.** `<button type="submit">` só dispara
   `wire:submit` de dentro do formulário que tem a diretiva; solto, o clique não gera request,

@@ -215,14 +215,32 @@ class UploadDeComprovanteTest extends TestCase
      *
      * @return list<string> rótulos dos botões de envio que estão soltos
      */
-    private function botoesForaDeFormulario(string $html): array
+    /**
+     * Carrega o HTML para inspeção.
+     *
+     * O `@click` do Alpine precisa virar outro nome antes: `@` não é começo
+     * válido de nome de atributo para o libxml, que então erra a leitura da tag
+     * e deixa o `>` de uma arrow function (`() =>`) fechá-la no meio. O
+     * resultado é o parser jurando que o código vazou quando a página está
+     * correta — um falso positivo que já custou uma investigação.
+     */
+    private function documento(string $html): \DOMDocument
     {
+        $html = preg_replace('/(\s)@([a-zA-Z][\w.:-]*)=/', '$1data-alpine-$2=', $html);
+
         $doc = new \DOMDocument;
 
         $anterior = libxml_use_internal_errors(true);
         $doc->loadHTML('<?xml encoding="UTF-8">'.$html);
         libxml_clear_errors();
         libxml_use_internal_errors($anterior);
+
+        return $doc;
+    }
+
+    private function botoesForaDeFormulario(string $html): array
+    {
+        $doc = $this->documento($html);
 
         $soltos = [];
 
@@ -261,6 +279,53 @@ class UploadDeComprovanteTest extends TestCase
             $this->botoesForaDeFormulario($html),
             'botão de envio fora de <form>: o clique não dispara nada',
         );
+    }
+
+    /**
+     * Texto que o participante realmente lê na tela — sem atributos, sem
+     * `<script>`. É nisso que um atributo Alpine quebrado aparece.
+     */
+    private function textoVisivel(string $html): string
+    {
+        $doc = $this->documento($html);
+
+        $xpath = new \DOMXPath($doc);
+
+        foreach (iterator_to_array($xpath->query('//script | //style')) as $no) {
+            $no->parentNode?->removeChild($no);
+        }
+
+        return (string) $doc->textContent;
+    }
+
+    public function test_codigo_do_alpine_nao_vaza_como_texto_na_tela(): void
+    {
+        /*
+         * O bloco `x-data="{ ... }"` é o valor de um atributo delimitado por
+         * aspas duplas. Uma única aspa dupla lá dentro — inclusive dentro de um
+         * comentário — encerra o atributo mais cedo, e todo o resto do
+         * JavaScript é renderizado como texto no meio da página, por cima do
+         * QR Code do PIX. Aconteceu exatamente assim.
+         *
+         * A suíte inteira passava com a tela nesse estado: os testes conferiam
+         * que certos trechos existem no HTML, e eles continuavam existindo —
+         * só que como texto, não como comportamento. Por isso este teste olha o
+         * texto visível, que é o que denuncia o vazamento.
+         */
+        $evento = Event::factory()->create();
+
+        $texto = $this->textoVisivel(
+            $this->inscrever(User::factory()->create(), $evento)->html()
+        );
+
+        foreach (['this.erro', 'this.enviando', 'setTimeout(', 'clearTimeout(', '=>', 'evento.target.files'] as $fragmento) {
+            $this->assertStringNotContainsString(
+                $fragmento,
+                $texto,
+                "código do Alpine vazou como texto na tela: [{$fragmento}]. ".
+                'Quase sempre é uma aspa dupla dentro de um atributo x-data/x-on.',
+            );
+        }
     }
 
     public function test_botao_de_trocar_comprovante_esta_dentro_do_formulario(): void

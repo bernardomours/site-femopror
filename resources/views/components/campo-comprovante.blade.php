@@ -41,7 +41,12 @@
          * CORS, 500 — o Livewire quebra no `JSON.parse` dentro da própria
          * promise: nenhum callback de erro roda e nenhum evento é disparado.
          * O upload simplesmente para, e a tela fica calada. É exatamente o
-         * relato "seleciono o arquivo e não acontece nada".
+         * relato: seleciono o arquivo e não acontece nada.
+         *
+         * Nada de aspas duplas aqui dentro, nem em comentário: este bloco todo
+         * é o valor do atributo x-data, que é delimitado por aspas duplas. A
+         * primeira que aparecer encerra o atributo, e todo o resto do código
+         * vaza como texto na tela. Use aspas simples ou crase.
          *
          * Então não confiamos só no evento de erro: se o progresso parar de
          * andar e nada mais chegar, assumimos travado. A conta é sobre a última
