@@ -395,6 +395,47 @@ congresso.
   congressos de todos os anos, então o número só crescia e nunca respondia "quantos vêm
   neste?".
 
+#### Acompanhamento — a home do painel
+
+`App\Filament\Pages\Dashboard` (substitui a `Dashboard` padrão do Filament). Um seletor de
+evento no topo e, abaixo, os números daquele evento: totais no topo e **gráficos de colunas**.
+
+**Os gráficos não são escritos por evento — são derivados dele.** Cada pergunta de
+`custom_fields` vira um gráfico automaticamente, então modalidade, restrição alimentar,
+tamanho de camisa ou o que a diretoria cadastrar amanhã aparecem sem deploy. Fixos, só o que
+existe em qualquer evento: inscritos por igreja, e a delegação (delegados oficiais ×
+visitantes) quando `is_congress`. A conta mora em **`App\Support\PanoramaDoEvento`**, fora do
+widget, pelo mesmo motivo das outras contas do projeto.
+
+Decisões que não são óbvias:
+
+- **É um widget desenhando N gráficos, não N widgets.** A quantidade depende do evento
+  selecionado, e registrar widgets dinamicamente a cada troca de filtro faria o Livewire
+  montar e desmontar componentes no meio de um re-render.
+- **A contagem parte do que está gravado, não da lista de opções atual.** `custom_answers` é
+  gravado com o **texto da pergunta e da opção** como chave. Renomear uma opção depois de
+  alguém responder zeraria a coluna em silêncio, e o painel mostraria menos gente do que
+  existe.
+- **Checkbox conta marcação, não inscrição** — quem joga dois esportes conta nos dois.
+- **Campo `text` mostra só as 10 respostas mais frequentes**: resposta livre é única por
+  pessoa, e o gráfico inteiro viraria uma coluna de altura 1 por inscrito.
+- **Quem não respondeu vai na descrição, não como coluna** ("3 sem resposta").
+- A `wire:key` de cada gráfico inclui um **resumo dos dados**: iguais, o Livewire preserva o
+  elemento e o gráfico não pisca; diferentes, troca o elemento e o Alpine monta um Chart.js
+  novo. Com `wire:ignore` o gráfico congelaria no primeiro evento aberto.
+- A classe **`fi-wi-chart` no wrapper do widget não é decorativa**: o CSS que dá cor às barras
+  é escopado nela (`.fi-wi-chart .fi-color .fi-wi-chart-bg-color`). Sem a classe nenhuma regra
+  casa, os spans de referência herdam a cor de texto da página e o Chart.js desenha tudo
+  **preto**.
+- **O painel não carrega o Tailwind do app** — ele serve o próprio bundle, e não há `@vite` no
+  layout do Filament. Dentro de view de painel, classe como `grid-cols-2`, `divide-y` ou
+  `mt-4` **não existe**: fica sem efeito e a tela desmonta. Só valem classes `fi-*` e `style`
+  inline. Foi assim que esta tela nasceu torta.
+
+> Widget do Filament carrega sob demanda (`x-intersect` → `$wire.__lazyLoad`). Em teste,
+> `Livewire::test(Dashboard::class)` renderiza só o esqueleto: para verificar conteúdo, teste
+> o widget direto, passando `pageFilters`.
+
 ---
 
 ## Testes
@@ -412,6 +453,7 @@ congresso.
 | `TrocaDeComprovanteTest` | PDF aceito e tipo proibido recusado, participante abrindo o próprio comprovante, troca substituindo e apagando o arquivo antigo, sem reenviar e-mail e sem mexer no valor, troca barrada depois da confirmação (inclusive quando a confirmação acontece no meio) e na inscrição de outra pessoa |
 | `AuditoriaSegurancaTest` | as quatro frentes: tetos de requisição (e a checagem de que as rotas sensíveis declaram `throttle`), payload de SQL sobrevivendo como texto, cada área restrita recusando usuário comum e visitante, arquivo privado só com assinatura válida, HTML sem dados de outro participante, e o inventário de propriedades públicas do componente de inscrição |
 | `FluxoInscricaoCopaTest` | o caminho inteiro de um evento avulso: os dois botões para quem está deslogado, criar conta e voltar para o evento, entrar e voltar, alternar sem perder o destino, open redirect recusado, esportes somando no valor, QR cobrando o valor salvo e acompanhando a alteração, comprovante no disco privado, e-mail só depois do comprovante, falha de SMTP não derrubando a inscrição |
+| `PanoramaDoEventoTest` | o painel de acompanhamento: cada pergunta do evento virando gráfico sozinha, pergunta nova aparecendo sem deploy, checkbox contando marcação e não inscrição, opção renomeada sem zerar o histórico, texto livre limitado às mais frequentes, sem-resposta fora do gráfico, inscrito sem igreja, caixa confirmado × a receber, recorte de um evento só, seletor preenchido e usuário comum barrado |
 | `PixPayloadTest` | estrutura do BR Code, valor, normalização de acento/tamanho, CRC |
 
 Factories: `UserFactory` (`admin()`, `ofChurch()` = presidente, `memberOfChurch()` = só
@@ -478,6 +520,20 @@ não repita a lógica de borda vermelha em cada formulário.
   se o progresso parar de andar por 20s, ele assume travado e mostra mensagem. A conta é
   sobre a última notícia recebida, não sobre o tempo total: num 4G ruim, envio demorado é
   normal e não pode virar erro.
+
+- **`database is locked` no SQLite não é corrupção: é concorrência.** O SQLite aceita um
+  escritor por vez, e `busy_timeout`, `journal_mode` e `synchronous` vinham `null` no
+  `config/database.php` — journal clássico, sem espera, falha na hora. Basta o navegador
+  disparar duas requisições ao mesmo tempo, o que é o normal: o painel carrega os widgets em
+  paralelo e, com `CACHE_STORE=database`, cada requisição ainda escreve na tabela `cache`.
+  Agora são **WAL + `busy_timeout` de 5s**, e o modo WAL fica gravado no próprio arquivo do
+  banco. Verificado com 50 requisições simultâneas: nenhum erro. Produção é MySQL, então isto
+  só vale para o ambiente de desenvolvimento.
+
+  > Erro de `rename(...tmp, ...)` em `storage/framework/views` na mesma situação é outra
+  > coisa, e é transitório: logo depois de um `view:clear`, várias requisições paralelas
+  > tentam compilar a mesma view e correm pelo rename atômico. Passa sozinho na segunda
+  > rodada — não confundir com o lock do banco.
 
 - **Uma aspa dupla dentro de `x-data="{ … }"` derruba a tela.** O bloco inteiro é o *valor* de
   um atributo delimitado por aspas duplas: a primeira aspa dupla lá dentro encerra o atributo,

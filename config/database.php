@@ -38,9 +38,25 @@ return [
             'database' => env('DB_DATABASE', database_path('database.sqlite')),
             'prefix' => '',
             'foreign_key_constraints' => env('DB_FOREIGN_KEYS', true),
-            'busy_timeout' => null,
-            'journal_mode' => null,
-            'synchronous' => null,
+
+            /*
+             * O SQLite aceita um escritor por vez. Com estes três em `null` ele
+             * usa journal clássico e falha na hora, com
+             * "SQLSTATE[HY000]: General error: 5 database is locked", em vez de
+             * esperar a vez.
+             *
+             * Basta o navegador disparar duas requisições ao mesmo tempo para
+             * acontecer — e isso é o normal, não a exceção: o painel carrega os
+             * widgets em paralelo e, com `CACHE_STORE=database`, cada requisição
+             * ainda escreve na tabela `cache`.
+             *
+             * WAL deixa leitura e escrita conviverem, e o busy_timeout faz quem
+             * chegou depois aguardar 5s em vez de estourar. Produção é MySQL,
+             * então isto só vale para o ambiente de desenvolvimento.
+             */
+            'busy_timeout' => env('DB_BUSY_TIMEOUT', 5000),
+            'journal_mode' => env('DB_JOURNAL_MODE', 'WAL'),
+            'synchronous' => env('DB_SYNCHRONOUS', 'NORMAL'),
             'transaction_mode' => 'DEFERRED',
         ],
 
