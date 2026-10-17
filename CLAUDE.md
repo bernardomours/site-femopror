@@ -691,8 +691,8 @@ Decisões que não são óbvias:
 | `ConstrutorDeFormularioTest` | o construtor: os dois formatos de opção lidos e cobrando o mesmo preço, o conversor limpando rótulo **e** resposta gravada, dry-run sem gravar, backup recusado abortando, parêntese sem número intacto, conversor idempotente; tipos novos (escolha única validada, texto longo, arquivo em disco privado, obrigatório barrando, voltar sem apagar o anexo) e pergunta de arquivo fora dos gráficos |
 | `FormularioEmPaginasTest` | o formulário em páginas: "Seus dados" sempre primeiro, evento sem páginas em tela única, cada página mostrando só as próprias perguntas, avanço validando só a página atual, voltar preservando o digitado, clique no passo só voltando, percurso inteiro gravando todas as respostas, alterar dados em tela única, indicador listando páginas + pagamento (e compacto no celular), pergunta órfã não sumindo |
 | `ExibicaoDeRespostasTest` | resposta de arquivo virando link assinado e não caminho cru, rótulo por tipo (PDF/HEIC/outro), pergunta renomeada sem regredir, checkbox como lista, e o caminho fora do texto visível nas três telas: Minhas inscrições, página do evento e painel da diretoria |
-| `DelegacaoDoPresidenteTest` | o presidente na própria delegação: formulário de nova inscrição já abrindo com ele, gravado junto com os demais, delegado amarrado à conta por e-mail, podendo se tirar da lista, e a edição não inserindo de novo |
 | `DelegacaoDoPresidenteTest` | o presidente na própria delegação (formulário já abrindo com ele, gravado junto, amarrado à conta por e-mail, podendo se tirar, edição não duplicando) e o registro de quem enviou (gravado do servidor, fora do schema do formulário, exibido no painel, e inscrição antiga dizendo "não registrado" em vez de chutar) |
+| `EdicaoDeUsuarioTest` | os cargos gravados pelo painel: marcar e desmarcar presidente persistindo, promover a admin, criar já com cargo, o cargo liberando mesmo o painel da UMP, voltar para a listagem ao salvar, e as travas que continuam (cargo fora do mass assignment, último admin não rebaixado) |
 | `PixPayloadTest` | estrutura do BR Code, valor, normalização de acento/tamanho, CRC |
 
 Factories: `UserFactory` (`admin()`, `ofChurch()` = presidente, `memberOfChurch()` = só
@@ -758,6 +758,23 @@ não repita a lógica de borda vermelha em cada formulário.
   português (e "Image path" na diretoria). O certo é `->hiddenLabel()` — que tira da tela mas
   **mantém o texto para leitor de tela**, então vale dar um `->label()` em português junto,
   senão a acessibilidade continua lendo o nome da coluna.
+
+- **Coluna fora do `fillable` + Filament = gravação que falha em silêncio.** O `EditRecord`
+  grava por `$record->update($data)` e o `CreateRecord` por `Model::create($data)` — os dois
+  são **mass assignment**, e o Eloquent descarta atributo não fillable sem reclamar. Como
+  `is_admin` e `is_church_president` ficam fora do `#[Fillable]` de propósito, marcar
+  "presidente" no painel mostrava a notificação de sucesso e **não gravava nada**.
+
+  `CreateUser` e `EditUser` passaram a sobrescrever `handleRecordCreation()` /
+  `handleRecordUpdate()`, separando essas duas colunas e atribuindo direto. A correção é no
+  Resource, **não** no `#[Fillable]`: abrir o fillable deixaria qualquer `update()` do
+  sistema promover alguém a admin. Coberto por `EdicaoDeUsuarioTest`, que também guarda a
+  exclusão do mass assignment.
+
+  > Em teste, um `Livewire::test()` de página do Filament deixa aquele painel como
+  > **corrente**: um `get('/ump')` depois, no mesmo teste, resolve rota no painel errado e
+  > estoura "Route [filament.ump.resources.users.index] not defined". Não é bug da aplicação
+  > — verifique autorização por `canAccessPanel()`, ou separe em outro teste.
 
 - **Campo `Hidden` do Filament não é campo do servidor.** Ver o padrão de segurança.
 - **Método de componente Livewire é público de verdade**, mesmo sem estar em tela nenhuma.
