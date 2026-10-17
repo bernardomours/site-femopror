@@ -82,6 +82,16 @@ class PanoramaDoEvento
         }
 
         foreach ($this->evento->customFieldDefinitions() as $campo) {
+            /*
+             * Pergunta de arquivo guarda o **caminho** como resposta. Um
+             * gráfico disso seria uma coluna de altura 1 por inscrito, com
+             * `respostas/xY3k....pdf` no eixo — e ainda exporia o caminho de
+             * um documento pessoal numa tela que é só de números.
+             */
+            if ($campo['type'] === 'file') {
+                continue;
+            }
+
             $graficos[] = $this->porPergunta($campo);
         }
 

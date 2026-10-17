@@ -14,6 +14,7 @@ class CongressSubscription extends Model
     protected $fillable = [
         'event_id',
         'church_id',
+        'submitted_by',
         'status',
         'receipt_path',
         'notes',
@@ -27,6 +28,19 @@ class CongressSubscription extends Model
     public function church(): BelongsTo
     {
         return $this->belongsTo(Church::class);
+    }
+
+    /**
+     * O presidente que enviou.
+     *
+     * É fillable como `church_id` e `status`, e a proteção é a mesma dos dois:
+     * `CreateCongressSubscription::mutateFormDataBeforeCreate()` **sobrescreve**
+     * o valor com `auth()->id()` antes de gravar, então o que vier do
+     * formulário é descartado. Ver o padrão de segurança no CLAUDE.md.
+     */
+    public function submittedBy(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'submitted_by');
     }
 
     public function delegates(): HasMany

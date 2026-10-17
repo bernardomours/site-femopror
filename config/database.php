@@ -57,7 +57,26 @@ return [
             'busy_timeout' => env('DB_BUSY_TIMEOUT', 5000),
             'journal_mode' => env('DB_JOURNAL_MODE', 'WAL'),
             'synchronous' => env('DB_SYNCHRONOUS', 'NORMAL'),
-            'transaction_mode' => 'DEFERRED',
+            /*
+             * IMMEDIATE, não DEFERRED — e é isto que o WAL sozinho não resolve.
+             *
+             * Transação DEFERRED começa como **leitora** e só pede o lock de
+             * escrita no primeiro UPDATE. Se outra conexão gravou nesse
+             * meio-tempo, o SQLite devolve `database is locked` na hora e o
+             * `busy_timeout` **não é usado**: esperar não adiantaria, porque o
+             * snapshot que ela leu já está velho.
+             *
+             * Era exatamente o caso do `increment()` do cache em banco (o rate
+             * limiter): lê o contador, depois grava. Com o construtor de
+             * formulário, cada tecla dispara uma requisição Livewire e as
+             * colisões viraram rotina. Reproduzido com dois processos — um
+             * lendo-e-escrevendo devagar, outro gravando no meio — e o erro
+             * aparecia instantaneamente, não após 5s.
+             *
+             * IMMEDIATE pega o lock de escrita na abertura, então quem chega
+             * depois **espera a vez** em vez de falhar.
+             */
+            'transaction_mode' => env('DB_TRANSACTION_MODE', 'IMMEDIATE'),
         ],
 
         'mysql' => [

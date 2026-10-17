@@ -2,6 +2,8 @@
 
 namespace App\Filament\Resources\CongressSubscriptions\Schemas;
 
+use App\Models\CongressSubscription;
+use Filament\Forms\Components\Placeholder;
 use Filament\Schemas\Schema;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\Repeater;
@@ -47,6 +49,28 @@ class CongressSubscriptionForm
                         ->label('Congresso')
                         ->disabled(),
 
+                    /*
+                     * Quem enviou. A tabela guardava só a igreja, então a
+                     * secretaria sabia de qual UMP veio, mas não com quem
+                     * falar sobre uma pendência.
+                     */
+                    Placeholder::make('enviada_por')
+                        ->label('Enviada por')
+                        ->columnSpanFull()
+                        ->content(function (?CongressSubscription $record): string {
+                            $presidente = $record?->submittedBy;
+
+                            if (! $presidente) {
+                                // Inscrição anterior a esta coluna. Dizer isso é
+                                // melhor que chutar o presidente atual da igreja:
+                                // a presidência troca, e o chute viraria histórico
+                                // errado.
+                                return 'Não registrado (inscrição enviada antes deste campo existir).';
+                            }
+
+                            return $presidente->name.' · '.$presidente->email;
+                        }),
+
                     FileUpload::make('receipt_path')
                         ->label('Comprovante de Pagamento (PIX)')
                         // Disco privado: o link gerado é assinado e expira, em
@@ -64,7 +88,8 @@ class CongressSubscriptionForm
                 ->schema([
                     Repeater::make('documents')
                         ->relationship()
-                        ->label('')
+                        ->label('Documentos enviados')
+                            ->hiddenLabel()
                         ->schema([
                             TextInput::make('document_type')
                                 ->label('Tipo de Documento')
@@ -88,7 +113,8 @@ class CongressSubscriptionForm
                 ->schema([
                     Repeater::make('delegates')
                         ->relationship()
-                        ->label('')
+                        ->label('Participantes')
+                            ->hiddenLabel()
                         ->schema([
                             TextInput::make('name')
                                 ->label('Nome'),

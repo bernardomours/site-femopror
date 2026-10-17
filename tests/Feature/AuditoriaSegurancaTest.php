@@ -296,7 +296,10 @@ class AuditoriaSegurancaTest extends TestCase
 
         $this->assertSame(
             [
-                'church_id', 'editando', 'email', 'eventId', 'isVisitor', 'name',
+                // `isVisitor` saiu: a categoria do congresso virou pergunta do
+                // formulário, validada contra as opções do evento, em vez de
+                // um booleano público que o navegador ligava à vontade.
+                'church_id', 'editando', 'email', 'eventId', 'name', 'pagina',
                 'phone', 'receipt', 'respostas', 'substituindoComprovante',
             ],
             $publicas,
@@ -307,6 +310,34 @@ class AuditoriaSegurancaTest extends TestCase
         // navegador pode ligá-los à vontade, porque quem decide se a operação
         // vale são `salvarDados()`, `trocarComprovante()` e `enviarComprovante()`,
         // que reconsultam a inscrição do usuário autenticado a cada chamada.
+        //
+        // `pagina` é da mesma natureza: pular para a última página forjando o
+        // valor não contorna nada, porque `salvarDados()` revalida o formulário
+        // **inteiro** antes de gravar — a validação por página só serve para não
+        // mostrar erro de campo que a pessoa ainda não viu.
+    }
+
+    public function test_pular_pagina_nao_contorna_pergunta_obrigatoria(): void
+    {
+        $evento = Event::factory()->create([
+            'form_pages' => [['title' => 'Adicionais']],
+            'custom_fields' => [
+                ['question' => 'Restrição alimentar', 'type' => 'text', 'required' => true, 'page' => 1],
+            ],
+        ]);
+
+        \Livewire\Livewire::actingAs(User::factory()->create())
+            ->test('event-show', ['id' => $evento->id])
+            ->set('name', 'Fulano de Tal')
+            ->set('email', 'fulano@example.com')
+            ->set('phone', '84999999999')
+            ->set('church_id', Church::factory()->create()->id)
+            // Forja a página final e tenta gravar sem passar pela pergunta.
+            ->set('pagina', 1)
+            ->call('salvarDados')
+            ->assertHasErrors();
+
+        $this->assertSame(0, Registration::count());
     }
 
     public function test_evento_id_e_travado_contra_adulteracao(): void

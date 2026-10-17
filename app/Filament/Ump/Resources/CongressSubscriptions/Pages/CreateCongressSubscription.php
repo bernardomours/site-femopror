@@ -13,6 +13,39 @@ class CreateCongressSubscription extends CreateRecord
     protected static string $resource = CongressSubscriptionResource::class;
 
     /**
+     * A delegação já abre com o próprio presidente na lista.
+     *
+     * Ele vai ao congresso como qualquer outro, mas precisava se digitar — e,
+     * esquecendo, ficava de fora da delegação que ele mesmo enviou: sumia da
+     * contagem da secretaria e do painel.
+     *
+     * O preenchimento é aqui, e não por `->default()` no repeater, porque
+     * repeater com `->relationship()` é hidratado **pela relação**: o default
+     * é ignorado e a lista nascia com uma linha em branco.
+     *
+     * É preenchimento, não imposição — dá para apagar a linha, porque há
+     * presidente que organiza sem ir. Forçar no save desfaria a escolha sem
+     * avisar. O e-mail é o da conta, e isso basta para o vínculo:
+     * `Delegate::booted()` casa delegado com usuário por e-mail.
+     */
+    protected function fillForm(): void
+    {
+        $this->callHook('beforeFill');
+
+        $presidente = auth()->user();
+
+        $this->form->fill([
+            'delegates' => [[
+                'name' => $presidente?->name,
+                'email' => $presidente?->email,
+                'type' => 'delegado',
+            ]],
+        ]);
+
+        $this->callHook('afterFill');
+    }
+
+    /**
      * A igreja e a situação são resolvidas aqui, no servidor, a partir do
      * usuário autenticado — nunca do que veio no formulário. Ver a nota no
      * CongressSubscriptionForm sobre por que os `Hidden` saíram.
@@ -44,6 +77,10 @@ class CreateCongressSubscription extends CreateRecord
 
         $data['church_id'] = $churchId;
         $data['status'] = 'pendente';
+        // Quem enviou — do servidor, nunca do formulário. A secretaria precisa
+        // saber com quem falar sobre uma pendência, e deduzir pelo presidente
+        // atual da igreja erraria assim que a presidência trocasse.
+        $data['submitted_by'] = auth()->id();
         unset($data['notes']);
 
         return $data;

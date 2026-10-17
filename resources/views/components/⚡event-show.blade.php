@@ -8,6 +8,7 @@ use App\Support\PixPayload;
 use App\Support\SafeMail;
 use App\Support\UploadLimit;
 use Illuminate\Database\UniqueConstraintViolationException;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\Rule;
@@ -43,7 +44,14 @@ new #[Layout('layouts.public')] class extends Component {
     public string $phone = '';
     public $church_id = '';
     public $receipt;
-    public bool $isVisitor = false;
+
+    /*
+     * `$isVisitor` saiu junto com a tela "Escolha sua categoria": ela era a
+     * única coisa que lia essa propriedade. Hoje a categoria é uma resposta do
+     * formulário, gravada em `custom_answers` como qualquer outra — e, por ser
+     * resposta, fica validada contra a lista de opções do evento, o que uma
+     * propriedade pública booleana nunca esteve.
+     */
 
     /** Voltou da etapa de pagamento para alterar os dados. */
     public bool $editando = false;
@@ -96,6 +104,86 @@ new #[Layout('layouts.public')] class extends Component {
     public function campos(): array
     {
         return $this->event->customFieldDefinitions();
+    }
+
+    /**
+     * As páginas do formulário: "Seus dados" mais as que a diretoria cadastrou.
+     *
+     * @return array<int, array{title: string, description: string}>
+     */
+    #[Computed]
+    public function paginas(): array
+    {
+        return $this->event->formPages();
+    }
+
+    /** As perguntas de uma página. */
+    public function camposDaPagina(int $indice): array
+    {
+        return array_values(array_filter($this->campos, fn (array $c) => $c['page'] === $indice));
+    }
+
+    /**
+     * Em que página o preenchimento está.
+     *
+     * Diferente da etapa macro (dados × pagamento), **esta** é propriedade e
+     * não vem do banco — de propósito. Até salvar, não existe inscrição para
+     * derivar nada: se a aba morrer aqui, a pessoa recomeça o formulário, que
+     * é o que já acontecia quando ele era uma tela só. O que não pode morrer é
+     * o que já foi gravado, e isso segue derivado da inscrição.
+     */
+    public int $pagina = 0;
+
+    public function irParaPagina(int $indice): void
+    {
+        // Só para trás pelo clique no passo: avançar tem que passar pela
+        // validação da página atual, senão o obrigatório deixa de ser obrigatório.
+        if ($indice >= 0 && $indice < $this->pagina) {
+            $this->pagina = $indice;
+        }
+    }
+
+    public function proximaPagina(): void
+    {
+        $this->validate($this->regrasDaPagina($this->pagina), $this->mensagens());
+
+        $this->pagina = min($this->pagina + 1, count($this->paginas) - 1);
+    }
+
+    public function paginaAnterior(): void
+    {
+        $this->pagina = max($this->pagina - 1, 0);
+    }
+
+    /**
+     * As regras só da página atual.
+     *
+     * Validar o formulário inteiro a cada avanço mostraria erro de campo que a
+     * pessoa ainda nem viu. Validar nada deixaria o obrigatório furado — por
+     * isso `salvarDados()` revalida tudo no fim, que é onde a gravação
+     * acontece.
+     */
+    private function regrasDaPagina(int $indice): array
+    {
+        $todas = $this->regras();
+
+        // A primeira página carrega os campos fixos (nome, e-mail, WhatsApp,
+        // igreja); as demais, só as próprias perguntas.
+        $regras = $indice === 0
+            ? array_filter($todas, fn (string $chave) => ! str_starts_with($chave, 'respostas.'), ARRAY_FILTER_USE_KEY)
+            : [];
+
+        foreach ($this->camposDaPagina($indice) as $campo) {
+            $chave = 'respostas.'.$campo['key'];
+
+            foreach ($todas as $nome => $regra) {
+                if ($nome === $chave || str_starts_with($nome, $chave.'.')) {
+                    $regras[$nome] = $regra;
+                }
+            }
+        }
+
+        return $regras;
     }
 
     /**
@@ -378,6 +466,9 @@ new #[Layout('layouts.public')] class extends Component {
         $this->preencherComInscricao($inscricao);
         $this->resetErrorBag();
         $this->editando = true;
+        // A edição é tela única; voltar com a paginação a meio caminho
+        // deixaria o stepper apontando para um passo que não está em tela.
+        $this->pagina = 0;
     }
 
     public function cancelarAlteracao(): void
@@ -457,10 +548,27 @@ new #[Layout('layouts.public')] class extends Component {
             $chave = 'respostas.'.$campo['key'];
             $rotulos = array_column($campo['options'], 'label');
 
+            // Obrigatória é escolha de quem cadastrou o evento; o padrão
+            // continua opcional, para não mudar evento que já existe.
+            $exigida = $campo['required'] ?? false;
+
             $regras[$chave] = match ($campo['type']) {
-                'checkbox' => ['array'],
-                'select' => ['nullable', 'string', Rule::in($rotulos)],
-                default => ['nullable', 'string', 'max:500'],
+                // Checkbox vazio chega como array vazio, não como null:
+                // `required` não pega isso, `min:1` pega.
+                'checkbox' => $exigida ? ['array', 'min:1'] : ['array'],
+                'select', 'radio' => [$exigida ? 'required' : 'nullable', 'string', Rule::in($rotulos)],
+                'textarea' => [$exigida ? 'required' : 'nullable', 'string', 'max:2000'],
+                /*
+                 * Campo de arquivo tem dois estados, e a regra muda conforme
+                 * o que está em mãos: arquivo recém-escolhido é validado como
+                 * arquivo; depois de gravado, o que resta na propriedade é o
+                 * **caminho** (string), e aplicar `file` nele reprovaria quem
+                 * só voltou para alterar outro dado.
+                 */
+                'file' => data_get($this->respostas, $campo['key']) instanceof UploadedFile
+                    ? ['file', 'mimes:jpg,jpeg,png,pdf,heic,heif', 'max:'.UploadLimit::maxKilobytes()]
+                    : [$exigida ? 'required' : 'nullable', 'string'],
+                default => [$exigida ? 'required' : 'nullable', 'string', 'max:500'],
             };
 
             if ($campo['type'] === 'checkbox') {
@@ -489,8 +597,15 @@ new #[Layout('layouts.public')] class extends Component {
         ];
 
         foreach ($this->campos as $campo) {
-            $mensagens['respostas.'.$campo['key'].'.in'] = 'Escolha uma das opções de "'.$campo['question'].'".';
-            $mensagens['respostas.'.$campo['key'].'.*.in'] = 'Escolha uma das opções de "'.$campo['question'].'".';
+            $chave = 'respostas.'.$campo['key'];
+
+            $mensagens[$chave.'.in'] = 'Escolha uma das opções de "'.$campo['question'].'".';
+            $mensagens[$chave.'.*.in'] = 'Escolha uma das opções de "'.$campo['question'].'".';
+
+            // Sem isto a mensagem sairia com o nome técnico do campo
+            // ("O campo respostas.0-voce-vai-como é obrigatório").
+            $mensagens[$chave.'.required'] = 'Responda "'.$campo['question'].'".';
+            $mensagens[$chave.'.min'] = 'Marque ao menos uma opção em "'.$campo['question'].'".';
         }
 
         return $mensagens;
@@ -506,7 +621,27 @@ new #[Layout('layouts.public')] class extends Component {
         $saida = [];
 
         foreach ($this->campos as $campo) {
-            $saida[$campo['question']] = $this->respostas[$campo['key']] ?? ($campo['type'] === 'checkbox' ? [] : '');
+            $valor = $this->respostas[$campo['key']] ?? ($campo['type'] === 'checkbox' ? [] : '');
+
+            if ($campo['type'] === 'file') {
+                /*
+                 * O que fica gravado é o **caminho**, em disco privado — são
+                 * documentos da pessoa (autorização de menor, ficha médica),
+                 * da mesma natureza do comprovante bancário, e por isso saem
+                 * só por URL assinada.
+                 *
+                 * Quando a pessoa volta para alterar outro dado sem reenviar o
+                 * arquivo, o que está na propriedade já é o caminho antigo:
+                 * guardamos como está, em vez de apagar o anexo.
+                 */
+                $saida[$campo['question']] = $valor instanceof UploadedFile
+                    ? $valor->store('respostas', config('femopror.uploads.disk'))
+                    : (string) $valor;
+
+                continue;
+            }
+
+            $saida[$campo['question']] = $valor;
         }
 
         return $saida;
@@ -606,7 +741,11 @@ new #[Layout('layouts.public')] class extends Component {
                     {{-- ② PAGAMENTO — inscrição salva, falta o comprovante --}}
                     @if($mostrarSalva && $inscricao->isAwaitingReceipt())
                         <div>
-                            <x-etapas-inscricao :atual="2" />
+                            {{-- Último passo: todas as páginas de preenchimento ficam com ✓. --}}
+                            <x-etapas-inscricao
+                                :paginas="$this->paginas"
+                                :pagamento="true"
+                                :no-pagamento="true" />
 
                             <h2 class="text-xl font-bold text-gray-900">Pagamento</h2>
                             <p class="mt-1 mb-5 text-sm text-gray-500">
@@ -628,11 +767,23 @@ new #[Layout('layouts.public')] class extends Component {
                                     @endif
                                 </div>
 
-                                @foreach((array) $inscricao->custom_answers as $pergunta => $resposta)
-                                    @if(filled($resposta))
+                                @foreach($inscricao->respostasParaExibicao() as $resposta)
+                                    @if($resposta['rotulo'] || filled($resposta['texto']))
                                         <p class="mt-2 text-gray-700">
-                                            <span class="text-gray-400">{{ $pergunta }}</span><br>
-                                            {{ is_array($resposta) ? implode(', ', $resposta) : $resposta }}
+                                            <span class="text-gray-400">{{ $resposta['pergunta'] }}</span><br>
+                                            @if($resposta['rotulo'])
+                                                {{-- Caminho cru não serve para abrir nada. --}}
+                                                @if($resposta['url'])
+                                                    <a href="{{ $resposta['url'] }}" target="_blank" rel="noopener"
+                                                       class="font-semibold text-green-900 underline underline-offset-2 hover:text-green-700">
+                                                        {{ $resposta['rotulo'] }}
+                                                    </a>
+                                                @else
+                                                    <span class="text-gray-400">Arquivo indisponível no momento</span>
+                                                @endif
+                                            @else
+                                                {{ $resposta['texto'] }}
+                                            @endif
                                         </p>
                                     @endif
                                 @endforeach
@@ -865,65 +1016,61 @@ new #[Layout('layouts.public')] class extends Component {
                             </a>
                         </div>
 
-                    {{-- Congresso: escolha entre visitante e delegado --}}
-                    @elseif($event->is_congress && ! $isVisitor && ! $editando)
-                        @php($voltarPara = route('events.show', $event->id, absolute: false))
+                    {{--
+                        A tela "Escolha sua categoria" (Sou Visitante / Sou
+                        Delegado) saiu daqui.
 
-                        <div class="h-full flex flex-col justify-center">
-                            <h2 class="text-2xl font-bold text-gray-900 text-center mb-2">Escolha sua categoria</h2>
-                            <p class="text-gray-500 text-center text-sm mb-8">Para prosseguir com a inscrição, identifique-se abaixo:</p>
+                        Ela bifurcava o congresso antes do formulário e mandava
+                        quem clicasse em "Sou Delegado" para o `/ump` — que é
+                        painel de presidente de UMP. O jovem delegado comum
+                        tomava 403 na cara, e a inscrição dele simplesmente não
+                        acontecia.
 
-                            <div class="grid grid-cols-1 gap-5">
-                                @auth
-                                    <button type="button" wire:click="$set('isVisitor', true)"
-                                    class="group relative flex flex-col items-center justify-center p-6 bg-white border-2 border-green-800 rounded-2xl hover:bg-green-50 transition-all duration-300 w-full">
-                                        <div class="w-12 h-12 bg-green-100 text-green-800 rounded-full flex items-center justify-center mb-3 group-hover:scale-110 transition-transform">
-                                            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"></path></svg>
-                                        </div>
-                                        <span class="text-xl font-bold text-green-950">Sou Visitante</span>
-                                        <span class="text-sm text-gray-600 text-center mt-2">Inscrição individual padrão.</span>
-                                    </button>
-                                @else
-                                    <a href="{{ route('login', ['redirect' => $voltarPara]) }}"
-                                    class="group relative flex flex-col items-center justify-center p-6 bg-white border-2 border-green-800 rounded-2xl hover:bg-green-50 transition-all duration-300 w-full">
-                                        <div class="w-12 h-12 bg-gray-100 text-gray-500 rounded-full flex items-center justify-center mb-3 group-hover:scale-110 transition-transform">
-                                            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path></svg>
-                                        </div>
-                                        <span class="text-xl font-bold text-gray-900">Sou Visitante</span>
-                                        <span class="text-sm text-red-600 font-bold text-center mt-2">Login / Cadastro</span>
-                                    </a>
-                                @endauth
+                        Agora todo mundo preenche o mesmo formulário e **declara
+                        a categoria** numa pergunta (ver
+                        `App\Support\PerguntasPadraoDoCongresso`), que é como a
+                        federação já fazia no formulário de papel. O `/ump`
+                        continua existindo para o que é da UMP: comprovante,
+                        relatórios, delegação oficial e diretoria.
+                    --}}
 
-                                <a href="{{ url('/ump') }}"
-                                class="group relative flex flex-col items-center justify-center p-6 bg-green-900 border-2 border-green-900 rounded-2xl hover:bg-green-950 transition-all duration-300 shadow-md w-full">
-                                    <div class="w-12 h-12 bg-white/20 text-white rounded-full flex items-center justify-center mb-3 group-hover:scale-110 transition-transform">
-                                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"></path></svg>
-                                    </div>
-                                    <span class="text-xl font-bold text-white">Sou Delegado</span>
-                                    <span class="text-sm text-green-100 text-center mt-2">Acesso exclusivo para Presidentes.</span>
-                                </a>
-                            </div>
-                        </div>
-
-                    {{-- ① SEUS DADOS --}}
+                    {{-- ① PREENCHIMENTO (uma ou várias páginas) --}}
                     @else
                         @auth
-                            @if($this->precoFinal > 0)
-                                <x-etapas-inscricao :atual="1" />
+                            @php($paginaAtual = $this->paginas[$pagina] ?? $this->paginas[0])
+                            {{--
+                                "Alterar dados" é edição do que já foi salvo: mostra tudo
+                                numa tela só. Paginar aqui esconderia pergunta de outra
+                                página de quem só quer corrigir o telefone — e, pior,
+                                `salvarDados()` regrava `custom_answers` inteiro, então o
+                                que não estivesse em tela se perderia.
+                            --}}
+                            @php($ultimaPagina = $editando || $pagina >= count($this->paginas) - 1)
+
+                            {{--
+                                O stepper só aparece quando há mais de um passo.
+                                Num evento gratuito de página única ele mostraria
+                                um passo só, que não informa nada.
+                            --}}
+                            @if(! $editando && (count($this->paginas) > 1 || $this->precoFinal > 0))
+                                <x-etapas-inscricao
+                                    :paginas="$this->paginas"
+                                    :pagina="$pagina"
+                                    :pagamento="$this->precoFinal > 0" />
                             @endif
 
                             <div class="flex items-center justify-between mb-5">
-                                <h2 class="text-xl font-bold text-gray-900">{{ $editando ? 'Alterar dados' : 'Seus dados' }}</h2>
-
-                                @if($event->is_congress && ! $editando)
-                                    <button type="button" wire:click="$set('isVisitor', false)" class="text-xs text-gray-500 hover:text-green-900 font-bold flex items-center gap-1">
-                                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path></svg>
-                                        Voltar
-                                    </button>
-                                @endif
+                                <div>
+                                    <h2 class="text-xl font-bold text-gray-900">
+                                        {{ $editando ? 'Alterar dados' : $paginaAtual['title'] }}
+                                    </h2>
+                                    @if(! $editando && $paginaAtual['description'])
+                                        <p class="mt-1 text-sm text-gray-500">{{ $paginaAtual['description'] }}</p>
+                                    @endif
+                                </div>
                             </div>
 
-                            @unless($editando)
+                            @unless($editando || $pagina > 0)
                                 <p class="mb-5 flex items-start gap-2 rounded-lg border border-gray-200 bg-gray-50 px-3.5 py-2.5 text-xs leading-relaxed text-gray-500">
                                     <svg class="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-gray-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
                                         <circle cx="12" cy="12" r="9" /><path stroke-linecap="round" d="M12 16v-4m0-3.5h.01" />
@@ -935,7 +1082,14 @@ new #[Layout('layouts.public')] class extends Component {
                                 </p>
                             @endunless
 
-                            <form wire:submit.prevent="salvarDados" class="space-y-5">
+                            {{--
+                                Na última página o envio grava; nas anteriores,
+                                valida só o que está em tela e avança. Validar o
+                                formulário inteiro a cada passo mostraria erro
+                                de campo que a pessoa ainda nem viu.
+                            --}}
+                            <form wire:submit.prevent="{{ $ultimaPagina ? 'salvarDados' : 'proximaPagina' }}" class="space-y-5">
+                                @if($pagina === 0 || $editando)
                                 <div>
                                     <label for="campo-nome" class="block text-xs font-bold text-gray-700 uppercase tracking-wider mb-1">Nome Completo</label>
                                     {{-- `value` explícito: evita o campo aparecer vazio antes de o Livewire aplicar o estado. --}}
@@ -971,23 +1125,53 @@ new #[Layout('layouts.public')] class extends Component {
                                     </select>
                                     @error('church_id') <span class="text-red-600 text-xs mt-1 block font-medium">{{ $message }}</span> @enderror
                                 </div>
+                                @endif
 
-                                @if(count($this->campos) > 0)
-                                    <div class="pt-4 mt-4 border-t border-gray-100">
-                                        <h3 class="text-sm font-bold text-green-900 mb-4 uppercase tracking-wider">Informações Adicionais</h3>
+                                @php($camposDaPagina = $editando ? $this->campos : $this->camposDaPagina($pagina))
 
-                                        @foreach($this->campos as $campo)
+                                @if(count($camposDaPagina) > 0)
+                                    <div @class(['pt-4 mt-4 border-t border-gray-100' => $pagina === 0])>
+                                        {{-- O título "Informações Adicionais" só faz sentido quando
+                                             as perguntas dividem a tela com os dados fixos. Numa
+                                             página própria, o título dela já é o cabeçalho. --}}
+                                        @if($pagina === 0)
+                                            <h3 class="text-sm font-bold text-green-900 mb-4 uppercase tracking-wider">Informações Adicionais</h3>
+                                        @endif
+
+                                        @foreach($camposDaPagina as $campo)
                                             <fieldset class="mb-5" wire:key="campo-{{ $campo['key'] }}">
-                                                <legend class="block text-xs font-bold text-gray-700 mb-2">{{ $campo['question'] }}</legend>
+                                                <legend class="block text-xs font-bold text-gray-700 mb-2">
+                                                    {{ $campo['question'] }}
+                                                    @if($campo['required'] ?? false)
+                                                        <span class="text-red-600" aria-hidden="true">*</span>
+                                                        <span class="sr-only">(obrigatória)</span>
+                                                    @endif
+                                                </legend>
 
-                                                @if($campo['type'] === 'checkbox')
+                                                @if($campo['image_path'])
+                                                    <img src="{{ \Illuminate\Support\Facades\Storage::disk('public')->url($campo['image_path']) }}"
+                                                         alt="Ilustração de: {{ $campo['question'] }}"
+                                                         loading="lazy"
+                                                         class="mb-3 max-h-48 w-auto rounded-xl border border-gray-200">
+                                                @endif
+
+                                                @if($campo['type'] === 'checkbox' || $campo['type'] === 'radio')
+                                                    {{--
+                                                        Checkbox e rádio desenham igual, e mudam só em
+                                                        `type` e no nome: rádio precisa de `name` comum
+                                                        para o navegador agrupar as opções e deixar
+                                                        escolher uma só.
+                                                    --}}
+                                                    @php($ehRadio = $campo['type'] === 'radio')
+
                                                     <div class="space-y-2">
                                                         @foreach($campo['options'] as $opcao)
                                                             <label class="flex items-center gap-3 cursor-pointer p-3 border border-gray-200 rounded-xl hover:bg-green-50 hover:border-green-300 transition-all bg-white shadow-sm">
-                                                                <input type="checkbox"
+                                                                <input type="{{ $ehRadio ? 'radio' : 'checkbox' }}"
+                                                                    @if($ehRadio) name="resposta-{{ $campo['key'] }}" @endif
                                                                     wire:model.live="respostas.{{ $campo['key'] }}"
                                                                     value="{{ $opcao['label'] }}"
-                                                                    class="w-5 h-5 rounded border-gray-300 text-green-900 focus:ring-green-900 transition">
+                                                                    class="w-5 h-5 {{ $ehRadio ? '' : 'rounded' }} border-gray-300 text-green-900 focus:ring-green-900 transition">
                                                                 <span class="text-sm font-medium text-gray-700">{{ $opcao['label'] }}</span>
                                                             </label>
                                                         @endforeach
@@ -1001,8 +1185,29 @@ new #[Layout('layouts.public')] class extends Component {
                                                         @endforeach
                                                     </select>
 
+                                                @elseif($campo['type'] === 'textarea')
+                                                    <textarea wire:model.blur="respostas.{{ $campo['key'] }}" rows="4" maxlength="2000"
+                                                        class="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:border-green-900 focus:ring-1 focus:ring-green-900 transition outline-none"></textarea>
+
+                                                @elseif($campo['type'] === 'file')
+                                                    {{--
+                                                        Campo de arquivo passa pelo mesmo componente do
+                                                        comprovante, e não por um `<input>` solto: é ele
+                                                        que escuta os eventos de upload do Livewire e
+                                                        tem o vigia de travamento. Sem isso, toda falha
+                                                        de envio vira "escolhi o arquivo e não aconteceu
+                                                        nada".
+                                                    --}}
+                                                    <x-campo-comprovante
+                                                        campo="respostas.{{ $campo['key'] }}"
+                                                        titulo="Anexar arquivo"
+                                                        :tem-arquivo="filled(data_get($respostas, $campo['key']))" />
                                                 @else
                                                     <input type="text" wire:model.blur="respostas.{{ $campo['key'] }}" maxlength="500" class="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:border-green-900 focus:ring-1 focus:ring-green-900 transition outline-none">
+                                                @endif
+
+                                                @if($campo['help'])
+                                                    <p class="mt-1.5 text-xs leading-relaxed text-gray-500">{{ $campo['help'] }}</p>
                                                 @endif
 
                                                 @error('respostas.'.$campo['key']) <span class="text-red-600 text-xs mt-1 block font-medium">{{ $message }}</span> @enderror
@@ -1020,13 +1225,31 @@ new #[Layout('layouts.public')] class extends Component {
                                     </div>
                                 @endif
 
-                                <button type="submit" wire:loading.attr="disabled" wire:target="salvarDados"
-                                        class="w-full bg-green-900 text-white font-bold py-3 rounded-xl shadow-md hover:bg-green-800 transition disabled:opacity-50 flex items-center justify-center gap-2">
-                                    <span wire:loading.remove wire:target="salvarDados">
-                                        {{ $this->precoFinal > 0 ? 'Ir para pagamento →' : 'Confirmar inscrição' }}
-                                    </span>
-                                    <span wire:loading wire:target="salvarDados">Salvando...</span>
-                                </button>
+                                @php($acao = $ultimaPagina ? 'salvarDados' : 'proximaPagina')
+
+                                <div class="flex items-center gap-3">
+                                    {{-- O "Voltar" é botão comum e fica FORA do submit:
+                                         dentro do form, um `<button>` sem type vira submit
+                                         e avançaria em vez de voltar. --}}
+                                    @if($pagina > 0 && ! $editando)
+                                        <button type="button" wire:click="paginaAnterior"
+                                                class="shrink-0 rounded-xl border border-gray-200 px-4 py-3 text-sm font-semibold text-gray-600 transition hover:bg-gray-50">
+                                            ← Voltar
+                                        </button>
+                                    @endif
+
+                                    <button type="submit" wire:loading.attr="disabled" wire:target="{{ $acao }}"
+                                            class="flex w-full items-center justify-center gap-2 rounded-xl bg-green-900 py-3 font-bold text-white shadow-md transition hover:bg-green-800 disabled:opacity-50">
+                                        <span wire:loading.remove wire:target="{{ $acao }}">
+                                            @if(! $ultimaPagina)
+                                                Continuar →
+                                            @else
+                                                {{ $this->precoFinal > 0 ? 'Ir para pagamento →' : 'Confirmar inscrição' }}
+                                            @endif
+                                        </span>
+                                        <span wire:loading wire:target="{{ $acao }}">{{ $ultimaPagina ? 'Salvando...' : 'Carregando...' }}</span>
+                                    </button>
+                                </div>
 
                                 @if($editando)
                                     <button type="button" wire:click="cancelarAlteracao" class="w-full text-center text-sm text-gray-500 hover:text-gray-900">

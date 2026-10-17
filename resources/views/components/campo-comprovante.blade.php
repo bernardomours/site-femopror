@@ -1,6 +1,10 @@
 @props([
     'temArquivo' => false,
     'titulo' => 'Anexar comprovante do PIX',
+    // Qual propriedade do componente recebe o arquivo. O padrão é o
+    // comprovante, que foi o primeiro uso; perguntas do tipo "envio de
+    // arquivo" passam a própria (`respostas.3-autorizacao`).
+    'campo' => 'receipt',
 ])
 
 @php
@@ -101,7 +105,7 @@
      x-on:livewire-upload-error="pararVigia(); enviando = false; erro = 'Não conseguimos enviar o arquivo. Confira sua conexão e tente de novo — se continuar, tente pelo Wi-Fi ou envie um arquivo menor.'"
      x-on:livewire-upload-progress="progresso = $event.detail.progress; vigiar()"
      class="relative rounded-xl border-2 border-dashed bg-gray-50 p-4 text-center"
-     :class="erro ? 'border-red-300' : '@error('receipt') border-red-300 @else border-gray-200 @enderror'">
+     :class="erro ? 'border-red-300' : '@error($campo) border-red-300 @else border-gray-200 @enderror'">
 
     <label class="block cursor-pointer">
         <svg class="mx-auto mb-2 h-8 w-8 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
@@ -112,7 +116,7 @@
         <span class="text-[10px] text-gray-400">Foto ou PDF, até {{ $maxLabel }}</span>
 
         <input type="file"
-               wire:model="receipt"
+               wire:model="{{ $campo }}"
                @change="conferir($event)"
                class="sr-only"
                accept="image/png,image/jpeg,image/heic,image/heif,application/pdf">
@@ -137,7 +141,7 @@
         </div>
     @endif
 
-    @error('receipt')
+    @error($campo)
         <span class="mt-1 block text-left text-xs font-medium text-red-600">{{ $message }}</span>
     @enderror
 </div>

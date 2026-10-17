@@ -61,7 +61,8 @@ class CongressSubscriptionForm
                     ->schema([
                         Repeater::make('documents')
                             ->relationship()
-                            ->label('')
+                            ->label('Documentos enviados')
+                            ->hiddenLabel()
                             ->addActionLabel('Adicionar Documento')
                             ->schema([
                                 Select::make('document_type')
@@ -90,11 +91,12 @@ class CongressSubscriptionForm
                     ]),
 
                 Section::make('Delegação')
-                    ->description('Cadastre os jovens que estarão presentes no congresso.')
+                    ->description('Você já entra na lista — some ou mude a categoria se não for ao congresso. Abaixo, acrescente os outros jovens da sua UMP.')
                     ->schema([
                         Repeater::make('delegates')
                             ->relationship()
-                            ->label('')
+                            ->label('Participantes')
+                            ->hiddenLabel()
                             ->addActionLabel('Adicionar Participante')
                             ->schema([
                                 TextInput::make('name')
@@ -121,6 +123,9 @@ class CongressSubscriptionForm
                                     ->required(),
                             ])
                             ->columns(3)
+                            // Quem põe o presidente na lista é
+                            // `CreateCongressSubscription::fillForm()`:
+                            // repeater com `relationship()` ignora `default()`.
                             ->defaultItems(1),
                     ]),
 
@@ -128,7 +133,7 @@ class CongressSubscriptionForm
                     ->description('Leia o motivo da pendência antes de reenviar seus dados.')
                     ->schema([
                         Textarea::make('notes')
-                            ->label('')
+                            ->hiddenLabel()
                             ->disabled()
                             ->dehydrated(false)
                             ->columnSpanFull(),

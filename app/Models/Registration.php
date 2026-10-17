@@ -159,6 +159,78 @@ class Registration extends Model
     }
 
     /**
+     * As respostas prontas para exibir, em um lugar só.
+     *
+     * Resposta de pergunta do tipo **arquivo** guarda o caminho
+     * (`respostas/xY3k….pdf`). Impresso como está, aparecia o caminho cru na
+     * tela — feio, inútil para quem quer abrir o documento, e ainda expõe o
+     * nome interno do arquivo. Aqui ele vira link assinado, como o comprovante
+     * já fazia.
+     *
+     * O tipo vem das definições do evento, casadas pelo **texto da pergunta**,
+     * que é como `custom_answers` é indexado. Se a pergunta foi renomeada ou
+     * apagada do evento depois, não há definição para consultar — por isso o
+     * reforço pelo prefixo do diretório, senão a resposta órfã voltaria a
+     * aparecer como caminho.
+     *
+     * @return list<array{pergunta: string, texto: string, url: ?string, rotulo: ?string}>
+     */
+    public function respostasParaExibicao(): array
+    {
+        $tipos = collect($this->event?->customFieldDefinitions() ?? [])
+            ->pluck('type', 'question');
+
+        $saida = [];
+
+        foreach ((array) $this->custom_answers as $pergunta => $resposta) {
+            $ehArquivo = ($tipos[$pergunta] ?? null) === 'file'
+                || (is_string($resposta) && str_starts_with($resposta, 'respostas/'));
+
+            if ($ehArquivo && filled($resposta)) {
+                $saida[] = [
+                    'pergunta' => (string) $pergunta,
+                    'texto' => '',
+                    'url' => $this->urlDeArquivo((string) $resposta),
+                    'rotulo' => self::rotuloDoArquivo((string) $resposta),
+                ];
+
+                continue;
+            }
+
+            $saida[] = [
+                'pergunta' => (string) $pergunta,
+                'texto' => is_array($resposta) ? implode(', ', $resposta) : (string) $resposta,
+                'url' => null,
+                'rotulo' => null,
+            ];
+        }
+
+        return $saida;
+    }
+
+    private static function rotuloDoArquivo(string $caminho): string
+    {
+        return match (true) {
+            str_ends_with(mb_strtolower($caminho), '.pdf') => 'Ver PDF enviado',
+            (bool) preg_match('/\.(heic|heif)$/i', $caminho) => 'Baixar foto enviada (HEIC)',
+            default => 'Ver arquivo enviado',
+        };
+    }
+
+    /** Link assinado de 30 minutos; null se o disco não responder. */
+    private function urlDeArquivo(string $caminho): ?string
+    {
+        try {
+            return Storage::disk(config('femopror.uploads.disk'))
+                ->temporaryUrl($caminho, now()->addMinutes(30));
+        } catch (Throwable $e) {
+            report($e);
+
+            return null;
+        }
+    }
+
+    /**
      * Link temporário para o próprio participante conferir o que enviou.
      *
      * O comprovante mora em disco privado: sem isto, quem mandou o arquivo

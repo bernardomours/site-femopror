@@ -11,7 +11,6 @@ use Filament\Panel;
 use Filament\PanelProvider;
 use Filament\Support\Colors\Color;
 use Filament\Widgets\AccountWidget;
-use Filament\Widgets\FilamentInfoWidget;
 use Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse;
 use Illuminate\Cookie\Middleware\EncryptCookies;
 use Illuminate\Foundation\Http\Middleware\PreventRequestForgery;
@@ -40,7 +39,11 @@ class UmpPanelProvider extends PanelProvider
             ->discoverWidgets(in: app_path('Filament/Ump/Widgets'), for: 'App\Filament\Ump\Widgets')
             ->widgets([
                 AccountWidget::class,
-                FilamentInfoWidget::class,
+                // O `FilamentInfoWidget` saiu: é o cartão de propaganda do
+                // Filament, com a versão instalada e links para a documentação
+                // e o GitHub. Quem usa este painel é presidente de UMP, não
+                // desenvolvedor — e dizer a versão exata do framework para
+                // quem está logado é informação que não ajuda ninguém aqui.
             ])
             ->middleware([
                 EncryptCookies::class,

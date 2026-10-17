@@ -5,9 +5,11 @@ namespace App\Filament\Resources\Registrations\Schemas;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TextInput;
 use Filament\Forms\Components\FileUpload;
-use Filament\Forms\Components\KeyValue;
+use App\Models\Registration;
+use Filament\Forms\Components\Placeholder;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Schema;
+use Illuminate\Support\HtmlString;
 
 class RegistrationForm
 {
@@ -74,12 +76,47 @@ class RegistrationForm
                         ->openable()
                         ->downloadable(),
                         
-                    KeyValue::make('custom_answers')
-                        ->label('Respostas do Formulário Dinâmico')
-                        ->keyLabel('Pergunta')
-                        ->valueLabel('Resposta')
+                    /*
+                     * Era um `KeyValue`, que só sabe imprimir texto: resposta
+                     * de pergunta do tipo arquivo aparecia como o caminho cru
+                     * (`respostas/xY3k….pdf`) — justamente para quem precisa
+                     * **abrir** o documento para conferir.
+                     */
+                    Placeholder::make('respostas')
+                        ->label('Respostas do formulário')
                         ->columnSpanFull()
-                        ->disabled(),
+                        ->content(function (?Registration $record): HtmlString {
+                            $respostas = $record?->respostasParaExibicao() ?? [];
+
+                            if ($respostas === []) {
+                                return new HtmlString('<span class="fi-color-gray">Este evento não tem perguntas personalizadas.</span>');
+                            }
+
+                            $linhas = collect($respostas)->map(function (array $r): string {
+                                // `e()` em tudo que veio de formulário: pergunta
+                                // e resposta são texto digitado pelo público.
+                                $pergunta = e($r['pergunta']);
+
+                                $valor = match (true) {
+                                    filled($r['rotulo']) && filled($r['url']) => sprintf(
+                                        '<a href="%s" target="_blank" rel="noopener" class="fi-link fi-color-primary" style="text-decoration: underline">%s</a>',
+                                        e($r['url']),
+                                        e($r['rotulo']),
+                                    ),
+                                    filled($r['rotulo']) => '<span style="opacity:.6">Arquivo indisponível no momento</span>',
+                                    blank($r['texto']) => '<span style="opacity:.6">Não respondido</span>',
+                                    default => e($r['texto']),
+                                };
+
+                                return sprintf(
+                                    '<div style="padding:.35rem 0"><div style="font-size:.75rem;opacity:.6">%s</div><div>%s</div></div>',
+                                    $pergunta,
+                                    $valor,
+                                );
+                            })->implode('');
+
+                            return new HtmlString($linhas);
+                        }),
                 ])->columns(2),
             ]);
     }

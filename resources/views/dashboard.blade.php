@@ -126,22 +126,29 @@
                                 </div>
                             @endif
 
-                            @if(is_array($inscricao->custom_answers))
-                                @foreach($inscricao->custom_answers as $pergunta => $resposta)
-                                    <div>
-                                        <dt class="mb-0.5 text-xs font-medium text-gray-500">{{ $pergunta }}</dt>
-                                        <dd class="text-sm text-gray-900">
-                                            @if(blank($resposta))
-                                                <span class="text-gray-400">Não respondido</span>
-                                            @elseif(is_array($resposta))
-                                                {{ implode(', ', $resposta) }}
+                            {{-- Resposta de pergunta do tipo arquivo vira link assinado;
+                                 o caminho cru não serve para ninguém abrir. --}}
+                            @foreach($inscricao->respostasParaExibicao() as $resposta)
+                                <div>
+                                    <dt class="mb-0.5 text-xs font-medium text-gray-500">{{ $resposta['pergunta'] }}</dt>
+                                    <dd class="text-sm text-gray-900">
+                                        @if($resposta['rotulo'])
+                                            @if($resposta['url'])
+                                                <a href="{{ $resposta['url'] }}" target="_blank" rel="noopener"
+                                                   class="font-semibold text-green-900 underline underline-offset-2 hover:text-green-700">
+                                                    {{ $resposta['rotulo'] }}
+                                                </a>
                                             @else
-                                                {{ $resposta }}
+                                                <span class="text-gray-400">Arquivo indisponível no momento</span>
                                             @endif
-                                        </dd>
-                                    </div>
-                                @endforeach
-                            @endif
+                                        @elseif(blank($resposta['texto']))
+                                            <span class="text-gray-400">Não respondido</span>
+                                        @else
+                                            {{ $resposta['texto'] }}
+                                        @endif
+                                    </dd>
+                                </div>
+                            @endforeach
                         </dl>
                     </div>
 

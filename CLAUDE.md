@@ -148,6 +148,181 @@ Duas armadilhas que isso resolve:
 `wire:model`, pergunta com ponto virava aninhamento de array e pergunta com aspas quebrava o
 HTML; no banco, o texto é o que o painel e o dashboard exibem.
 
+### O construtor de formulário
+
+`App\Filament\Schemas\ConstrutorDePerguntas` é o repeater de perguntas, em **um lugar só**,
+usado pelo cadastro de evento (`events.custom_fields`) e pelos modelos
+(`form_templates.fields`). As duas telas guardam a mesma estrutura, e é isso que permite
+carregar um modelo copiando o JSON. Duas cópias divergiriam no primeiro campo novo, e aí o
+modelo geraria pergunta que o evento não sabe ler.
+
+Cada pergunta tem: texto, **tipo** (`Event::tiposDePergunta()` — texto curto, texto longo,
+lista suspensa, escolha única, múltipla escolha, envio de arquivo), **ajuda**, **obrigatória**,
+**imagem** e, nos tipos com lista, as **opções**.
+
+#### Rótulo e valor são campos separados
+
+As opções eram **uma string** com o preço dentro de parênteses: `Futsal(R$5,00)`. Três
+problemas, todos reais:
+
+1. **O preço virava parte do nome.** Ficava `"Futsal(R$5,00)"` gravado na resposta e assim na
+   coluna do gráfico do painel.
+2. **Quebrava na vírgula do decimal** — `M (+30,00)` virava duas opções e os 30 reais sumiam.
+3. **Reajustar o preço renomeava a opção**, e como os gráficos agrupam pelo texto, o
+   histórico se partia em duas colunas.
+
+Hoje é `[{label, surcharge}]`. **`Event::normalizeOptions()` lê os dois formatos**, e não por
+indecisão: o conversor roda à mão, com backup, então entre o deploy e a conversão o banco tem
+os dois convivendo. Ler só o novo deixaria todo evento existente sem opção nenhuma — sem
+validação e sem preço — até alguém lembrar de rodar o comando.
+
+```bash
+php artisan femopror:migrar-perguntas --dry-run
+```
+
+Converte perguntas **e respostas já gravadas**: `"Futsal(R$5,00)"` vira rótulo `Futsal` +
+valor 5,00, e a resposta de quem já se inscreveu é reescrita junto. Sem isso a resposta antiga
+deixaria de casar com a opção nova e o gráfico racharia em duas colunas para a mesma coisa.
+Pede backup, é idempotente, e lista os rótulos **suspeitos** — parêntese com número mas sem
+`R$` nem `+` pode não ser preço (`Camiseta (tamanho 2)` já era lido como R$ 2,00 antes disto;
+o conversor só torna isso visível).
+
+> `EditEvent::mutateFormDataBeforeFill()` converte o **formato** ao abrir a tela, porque
+> repeater ligado a uma string quebra o Edit de todo evento anterior ao conversor. Ali o
+> rótulo vem **intacto**: limpar sem mexer nas respostas é exatamente o que racha o gráfico.
+
+#### Modelos de formulário
+
+`form_templates` + `FormTemplateResource`. O conjunto do congresso era uma classe PHP — mudar
+uma palavra exigia deploy. Agora é linha no banco, semeada por migration, que a diretoria
+edita sozinha.
+
+No cadastro de evento: **"Carregar modelo"** e **"Salvar como modelo"**. Carregar **copia** o
+JSON; a partir dali os dois são independentes. É o que se quer: evento que já recebeu
+inscrição não pode mudar de pergunta porque alguém editou um modelo.
+
+#### Pergunta do tipo arquivo
+
+A resposta é o **caminho**, em disco privado (`respostas/`) — é documento da pessoa
+(autorização de menor, ficha médica), da mesma natureza do comprovante bancário, e sai só por
+URL assinada.
+
+- Usa o `<x-campo-comprovante>` (agora com a prop `campo`), não um `<input>` solto: é ele que
+  tem os guardas contra falha silenciosa de upload.
+- A validação muda conforme o estado: arquivo recém-escolhido é validado como arquivo; depois
+  de gravado o que resta é o caminho, e aplicar `file` nele reprovaria quem só voltou para
+  corrigir o telefone. Voltar para alterar dados **não apaga** o anexo.
+- **Fica fora dos gráficos** do Acompanhamento: seria uma coluna de altura 1 por inscrito,
+  com o caminho de um documento pessoal numa tela que é só de números.
+- **Na exibição vira link, nunca caminho.** `Registration::respostasParaExibicao()` é a única
+  implementação disso, usada por "Minhas inscrições", pela página do evento e pelo painel da
+  diretoria. Sem ela, as três telas imprimiam `respostas/xY3k….pdf` — inútil para quem quer
+  abrir o documento e expondo o nome interno do arquivo. O rótulo acompanha o tipo: *Ver PDF
+  enviado*, *Baixar foto enviada (HEIC)* (o navegador não abre HEIC, e sem o aviso a
+  tesouraria clica e acha que corrompeu) ou *Ver arquivo enviado*.
+
+  > O tipo vem das definições do evento, casadas pelo **texto da pergunta** — que é como
+  > `custom_answers` é indexado. Pergunta renomeada depois não tem definição para consultar,
+  > então há o reforço pelo prefixo `respostas/`; sem ele a resposta órfã voltaria a aparecer
+  > como caminho.
+
+  > No painel, isso **não** cabe num `KeyValue`, que só imprime texto. É um `Placeholder` com
+  > `HtmlString`, e por isso pergunta e resposta passam por `e()`: as duas são texto digitado
+  > pelo público.
+
+#### Páginas do formulário
+
+`events.form_pages` (`[{title, description}]`) + `custom_fields[].page` apontando para um
+índice. **A primeira página é sempre "Seus dados"** e não vem do cadastro: nome, e-mail,
+WhatsApp e igreja existem em todo evento, e sem eles a inscrição não identifica ninguém. O
+que a diretoria cadastra são as páginas seguintes.
+
+Sem páginas cadastradas, é tela única — o formulário de antes, sem conversão nenhuma. É por
+isso que a coluna é separada em vez de `custom_fields` virar `[{página, perguntas[]}]`: essa
+forma é lida pelo formulário público, pelos gráficos, pelos modelos e pelo conversor, e mudar
+os cinco obrigaria a migrar o que já está gravado.
+
+- **Pergunta apontando para página inexistente cai na primeira.** A diretoria apaga a página
+  e esquece a pergunta; ela fica no lugar errado, mas aparece. Pergunta invisível é resposta
+  que nunca chega, e ninguém descobre até o dia do evento.
+- **A validação ao avançar é só da página atual.** Validar tudo a cada passo mostraria erro de
+  campo que a pessoa ainda não viu; validar nada furaria o obrigatório. `salvarDados()`
+  revalida o formulário **inteiro** no fim, que é onde a gravação acontece — por isso forjar
+  `pagina` não contorna nada (coberto por `AuditoriaSegurancaTest`).
+- **Clicar num passo só volta.** Pular adiante pelo indicador contornaria a validação.
+- **"Alterar dados" é tela única**, sem paginação: `salvarDados()` regrava `custom_answers`
+  inteiro, então o que não estivesse em tela seria gravado em branco — quem voltasse só para
+  corrigir o telefone perderia as outras respostas.
+
+> **A página corrente é propriedade, não derivada do banco** — e é a única exceção à regra.
+> Até salvar não existe inscrição de onde derivar; se a aba morrer aqui, a pessoa recomeça o
+> formulário, que é o que já acontecia quando ele era uma tela só. O que não pode morrer é o
+> que já foi gravado, e a etapa macro (preenchimento × pagamento) continua saindo da inscrição.
+
+#### O indicador de etapas
+
+`<x-etapas-inscricao>` recebe as páginas e mostra o caminho inteiro, com ✓ no concluído. Duas
+apresentações, e não é enfeite: **no celular a lista não cabe** — quatro passos dão ~580px numa
+tela de 375px, e rolagem lateral é um padrão que quase ninguém percebe (a pessoa veria
+"1 Seus dados 2 Inform…" e concluiria que são dois). Abaixo de `lg` vira
+**"Passo 2 de 4 · Informações adicionais"** com barra de progresso, em 34px de altura.
+
+Não aparece quando há um passo só: evento gratuito de página única não tem o que indicar.
+
+#### Duas perguntas com o mesmo texto se sobrescrevem
+
+A resposta é gravada com o texto da pergunta como chave (`$saida[$campo['question']]`), então
+a segunda apaga a primeira **em silêncio**. Era improvável enquanto o cadastro era manual e
+penoso; com o construtor, vira questão de tempo — por isso o `->distinct()` no campo.
+
+### Pergunta obrigatória
+
+`custom_fields[].required` (toggle no cadastro do evento). **Ausente significa opcional**, para
+evento já cadastrado não mudar de comportamento por causa de uma chave nova no JSON.
+
+Toda pergunta personalizada era `nullable`, sem como mudar. Serve para "qual o tamanho da sua
+camisa?", mas não para "possui alguma restrição alimentar?" — essa a cozinha precisa saber
+antes, e em branco só se descobre no dia.
+
+- **Checkbox vazio chega como array vazio, não como `null`:** `required` não pega isso,
+  `min:1` pega.
+- A mensagem cita o texto da pergunta. Sem isso sairia *"O campo respostas.0-voce-vai-como é
+  obrigatório"*, que não diz nada para quem está se inscrevendo.
+
+### Formulário padrão do congresso
+
+`App\Support\PerguntasPadraoDoCongresso` guarda as perguntas que todo congresso faz, e o
+cadastro de evento tem o botão **"Usar perguntas padrão do congresso"** que as despeja no
+repeater. Elas viram `custom_fields` comuns — **não existe caminho paralelo de renderização**,
+então validação, cálculo de acréscimo e os gráficos do painel continuam valendo de graça.
+
+O atalho existe porque, redigitadas a cada ano, as perguntas saíam com o texto um pouco
+diferente — e os gráficos agrupam **pelo texto da pergunta**, então comparar um congresso com
+o do ano anterior deixava de funcionar.
+
+**O que deliberadamente NÃO está no padrão:** nome, e-mail, WhatsApp e igreja. Os quatro já
+são campos fixos e vêm pré-preenchidos do cadastro da pessoa. Repeti-los faria o participante
+responder duas vezes e gravaria a igreja em dois lugares — e é `registrations.church_id` que
+alimenta o gráfico "inscritos por igreja".
+
+> "Diretoria ou secretário (FEMOPROR)" tem parênteses, que é como o sistema marca acréscimo
+> (`Camisa M (+30,00)`). É seguro: `parseOptions()` só lê acréscimo de parênteses **com
+> dígitos**.
+
+### A categoria do congresso é pergunta, não bifurcação
+
+Existia uma tela "Escolha sua categoria" antes do formulário, com "Sou Visitante" e "Sou
+Delegado" — e o segundo botão mandava para o `/ump`, que é painel de **presidente de UMP**. O
+jovem delegado comum tomava 403 e simplesmente não se inscrevia.
+
+Agora todo mundo preenche o mesmo formulário e declara a categoria numa pergunta. O `/ump`
+segue para o que é da UMP: comprovante, relatórios, delegação oficial e diretoria.
+
+> A propriedade pública `$isVisitor` saiu junto. Virar resposta foi ganho de segurança: como
+> resposta ela é validada com `Rule::in()` contra as opções do evento, coisa que um booleano
+> público nunca esteve. O inventário de propriedades públicas em `AuditoriaSegurancaTest`
+> acompanha.
+
 ---
 
 ## Arquivos privados
@@ -377,10 +552,66 @@ passava direto — parecia uma proteção que não existia. **Ninguém verifica 
 e `MAIL_MAILER=log` significa que nem recuperação de senha sai.
 
 ### Painel `/ump` (Filament)
-Uma tela: a inscrição do congresso da própria UMP. Escopo por `getEloquentQuery()`.
-Depois de **aprovada**, fica somente leitura (`CongressSubscription::isEditableByChurch()`) —
-mexer no comprovante ou na delegação reescreveria o que a secretaria já conferiu. Sem
-exclusão, nem individual nem em massa: apagar leva delegados e documentos em cascata.
+
+Duas telas, as duas escopadas na igreja do usuário.
+
+**Inscrição - Congresso.** Evento, comprovante, documentos e delegação da própria UMP. Escopo
+por `getEloquentQuery()`. Depois de **aprovada**, fica somente leitura
+(`CongressSubscription::isEditableByChurch()`) — mexer no comprovante ou na delegação
+reescreveria o que a secretaria já conferiu. Sem exclusão, nem individual nem em massa:
+apagar leva delegados e documentos em cascata.
+
+**A delegação já abre com o próprio presidente na lista.** Ele vai ao congresso como qualquer
+outro, mas precisava se digitar — e, esquecendo, ficava de fora da delegação que ele mesmo
+enviou: sumia da contagem da secretaria e do painel. O e-mail preenchido é o da conta, e isso
+basta para o vínculo, porque `Delegate::booted()` casa delegado com usuário por e-mail.
+
+É **preenchimento, não imposição**: dá para apagar a linha, porque há presidente que organiza
+sem ir. Forçar no save desfaria a escolha sem avisar.
+
+> Fica em `CreateCongressSubscription::fillForm()`, e não num `->default()` no repeater:
+> **repeater com `->relationship()` é hidratado pela relação e ignora o `default()`** — a
+> lista nascia com uma linha em branco. Na edição o `fillForm` do `EditRecord` é outro, então
+> abrir a inscrição não acrescenta o presidente de novo.
+
+**`congress_subscriptions.submitted_by`** guarda **quem enviou**. A tabela tinha só a igreja:
+a secretaria sabia de qual UMP veio, mas não com quem falar sobre uma pendência. Deduzir pelo
+presidente atual não serve — a presidência troca, e o histórico passaria a atribuir inscrição
+antiga a quem nem era presidente na época. Por isso inscrição anterior à coluna aparece como
+*"Não registrado"* no painel, em vez de um chute.
+
+É fillable como `church_id` e `status`, e a proteção é a mesma dos três:
+`mutateFormDataBeforeCreate()` **sobrescreve** com `auth()->id()` antes de gravar. A trava
+testável é a **ausência dos três no schema do formulário**
+(`assertFormFieldDoesNotExist`) — ver a nota sobre `->set('data.…')` não simular adulteração.
+
+**Minha Diretoria** (`App\Filament\Ump\Pages\MinhaDiretoria`). Os nomes da diretoria local,
+que aparecem na página pública da igreja. Antes existia só no painel da federação: a UMP
+mandava os nomes por fora e alguém da diretoria digitava.
+
+- **É uma página, não um Resource com listagem.** Uma UMP tem uma diretoria atual. Uma
+  listagem convidaria a criar várias e exporia o `is_active`, que é justamente o que a home
+  usa para escolher qual mostrar (`$church->boards->active()`). Salvar de novo **atualiza** a
+  existente; não cria uma segunda.
+- **`church_id` e `is_active` não são campos do formulário** e são definidos no `save()` a
+  partir de `auth()`. Vale o padrão de segurança do projeto — foi com dois `Hidden` que a
+  inscrição de congresso deixou forjar `status` e `church_id`.
+- A busca da diretoria já filtra por `church_id`: é isso que impede carregar (e depois
+  sobrescrever) a diretoria de outra UMP. **Tirar esse filtro é a falha que o teste pega.**
+- A foto vai para o **disco público**, ao contrário de comprovante e relatório: ela é feita
+  para ser vista por qualquer visitante do site.
+- **Admin não vê a tela** (`canAccess()` exige `church_id`): ele não tem igreja, e o caminho
+  dele é o painel da federação, que edita a diretoria de qualquer uma.
+
+> O `FilamentInfoWidget` saiu do dashboard do `/ump`. É o cartão de propaganda do Filament,
+> com a versão instalada e links para documentação e GitHub — quem usa este painel é
+> presidente de UMP, não desenvolvedor.
+
+> Em teste de Filament, `->set('data.campo_que_nao_existe', …)` **não** simula adulteração:
+> `getState()` devolve só o que está no schema, então o valor nunca chega ao `save()`. Um
+> teste escrito assim passa com ou sem a trava — verificado por mutação. O que vale guardar é
+> a **ausência do campo no schema** (`assertFormFieldDoesNotExist`), que é o erro de verdade
+> possível: alguém adicionar o campo um dia.
 
 ### Painel `/area-da-diretoria` (Filament)
 Eventos, inscrições, igrejas, diretorias, downloads, usuários e a análise das inscrições de
@@ -454,6 +685,14 @@ Decisões que não são óbvias:
 | `AuditoriaSegurancaTest` | as quatro frentes: tetos de requisição (e a checagem de que as rotas sensíveis declaram `throttle`), payload de SQL sobrevivendo como texto, cada área restrita recusando usuário comum e visitante, arquivo privado só com assinatura válida, HTML sem dados de outro participante, e o inventário de propriedades públicas do componente de inscrição |
 | `FluxoInscricaoCopaTest` | o caminho inteiro de um evento avulso: os dois botões para quem está deslogado, criar conta e voltar para o evento, entrar e voltar, alternar sem perder o destino, open redirect recusado, esportes somando no valor, QR cobrando o valor salvo e acompanhando a alteração, comprovante no disco privado, e-mail só depois do comprovante, falha de SMTP não derrubando a inscrição |
 | `PanoramaDoEventoTest` | o painel de acompanhamento: cada pergunta do evento virando gráfico sozinha, pergunta nova aparecendo sem deploy, checkbox contando marcação e não inscrição, opção renomeada sem zerar o histórico, texto livre limitado às mais frequentes, sem-resposta fora do gráfico, inscrito sem igreja, caixa confirmado × a receber, recorte de um evento só, seletor preenchido e usuário comum barrado |
+| `DiretoriaDaUmpTest` | a diretoria preenchida pelo presidente: grava na própria igreja e nasce ativa, abre já preenchida, salvar de novo atualiza em vez de duplicar, presidente obrigatório, `church_id`/`is_active` fora do formulário, diretoria de outra igreja intocada, admin sem igreja e membro comum barrados |
+| `CriarPresidenteTest` | o comando que dá acesso ao `/ump`: cria com igreja e cargo e a conta abre o painel, e-mail normalizado, senha com hash, senhas diferentes não criam conta, conta existente é promovida sem duplicar, recusar a confirmação não mexe em nada, admin da federação recusado, e sem igreja cadastrada explica em vez de quebrar |
+| `FormularioDeCongressoTest` | o formulário padrão: as perguntas aparecem, o padrão não repete nome/e-mail/WhatsApp/igreja, parênteses sem número não viram acréscimo, categoria gravada e valor fora da lista recusado, pergunta obrigatória barrando com mensagem legível, checkbox obrigatório exigindo marcação, opcional seguindo opcional, asterisco só na obrigatória, as telas de criar e editar evento abrindo (regressão do 500), e o congresso indo direto ao formulário |
+| `ConstrutorDeFormularioTest` | o construtor: os dois formatos de opção lidos e cobrando o mesmo preço, o conversor limpando rótulo **e** resposta gravada, dry-run sem gravar, backup recusado abortando, parêntese sem número intacto, conversor idempotente; tipos novos (escolha única validada, texto longo, arquivo em disco privado, obrigatório barrando, voltar sem apagar o anexo) e pergunta de arquivo fora dos gráficos |
+| `FormularioEmPaginasTest` | o formulário em páginas: "Seus dados" sempre primeiro, evento sem páginas em tela única, cada página mostrando só as próprias perguntas, avanço validando só a página atual, voltar preservando o digitado, clique no passo só voltando, percurso inteiro gravando todas as respostas, alterar dados em tela única, indicador listando páginas + pagamento (e compacto no celular), pergunta órfã não sumindo |
+| `ExibicaoDeRespostasTest` | resposta de arquivo virando link assinado e não caminho cru, rótulo por tipo (PDF/HEIC/outro), pergunta renomeada sem regredir, checkbox como lista, e o caminho fora do texto visível nas três telas: Minhas inscrições, página do evento e painel da diretoria |
+| `DelegacaoDoPresidenteTest` | o presidente na própria delegação: formulário de nova inscrição já abrindo com ele, gravado junto com os demais, delegado amarrado à conta por e-mail, podendo se tirar da lista, e a edição não inserindo de novo |
+| `DelegacaoDoPresidenteTest` | o presidente na própria delegação (formulário já abrindo com ele, gravado junto, amarrado à conta por e-mail, podendo se tirar, edição não duplicando) e o registro de quem enviou (gravado do servidor, fora do schema do formulário, exibido no painel, e inscrição antiga dizendo "não registrado" em vez de chutar) |
 | `PixPayloadTest` | estrutura do BR Code, valor, normalização de acento/tamanho, CRC |
 
 Factories: `UserFactory` (`admin()`, `ofChurch()` = presidente, `memberOfChurch()` = só
@@ -490,6 +729,35 @@ Os componentes do Breeze foram reescritos nesse sistema (`text-input`, `select-i
 não repita a lógica de borda vermelha em cada formulário.
 
 ## Armadilhas já encontradas (não repetir)
+
+- **`unique()` do Filament dentro de um Resource ignora o registro do formulário — mesmo em
+  outra tabela.** Uma ação no cadastro de evento salvava um modelo com
+  `TextInput::make('nome')->unique('form_templates', 'name')`, e a consulta saía
+  `select count(*) from form_templates where name = ? and "events"."id" <> 7`:
+  *no such column: events.id*. O "ignore" vem do registro em edição (o evento), não da tabela
+  checada. Em campo que valida contra **outra** tabela, use a regra crua
+  (`->rule(Rule::unique(...))`).
+
+  > O teste disso passava com o bug no lugar, porque usava a tela de **criar** — sem registro
+  > não há o que ignorar, e a cláusula não aparece. Ação de Resource que valida contra outra
+  > tabela precisa de teste na tela de **editar**.
+
+- **A suíte não cobria as telas do painel, e um 500 passou batido.** A ação do formulário de
+  evento foi escrita como `Repeater::headerActions()`, que **não existe no Filament 5**:
+  `BadMethodCallException` ao abrir "Criar Evento", e os 198 testes continuaram verdes porque
+  nenhum deles renderizava um formulário do Filament. Um `get()` na tela com
+  `assertSuccessful()` custa nada e vale por qualquer asserção fina — está em
+  `FormularioDeCongressoTest`. Ao mexer em schema de Resource, acrescente esse teste.
+
+  > Sintoma enganoso: a página de erro do Laravel mostra o **código-fonte destacado**, então
+  > procurar o rótulo do botão com `innerText` o encontra — dentro da stack trace. Confira
+  > sempre se a página é mesmo a tela, e não o erro.
+
+- **`->label('')` não esconde rótulo no Filament: ele cai no nome da coluna.** Era assim que
+  o painel mostrava **"Delegates"** e **"Documents"** em inglês no meio de um formulário em
+  português (e "Image path" na diretoria). O certo é `->hiddenLabel()` — que tira da tela mas
+  **mantém o texto para leitor de tela**, então vale dar um `->label()` em português junto,
+  senão a acessibilidade continua lendo o nome da coluna.
 
 - **Campo `Hidden` do Filament não é campo do servidor.** Ver o padrão de segurança.
 - **Método de componente Livewire é público de verdade**, mesmo sem estar em tela nenhuma.
@@ -529,6 +797,22 @@ não repita a lógica de borda vermelha em cada formulário.
   Agora são **WAL + `busy_timeout` de 5s**, e o modo WAL fica gravado no próprio arquivo do
   banco. Verificado com 50 requisições simultâneas: nenhum erro. Produção é MySQL, então isto
   só vale para o ambiente de desenvolvimento.
+
+  > **E WAL + `busy_timeout` ainda não bastam** — o erro voltou enquanto a diretoria montava
+  > um formulário. Faltava `transaction_mode`, que vinha `DEFERRED`: a transação começa como
+  > **leitora** e só pede o lock de escrita no primeiro UPDATE; se outra conexão gravou nesse
+  > meio-tempo, o SQLite devolve `database is locked` **na hora** e o `busy_timeout` nem é
+  > consultado — esperar não adiantaria, porque o snapshot lido já está velho.
+  >
+  > Era o caso do `increment()` do cache em banco, que o rate limiter usa: lê o contador,
+  > depois grava (daí o `update "cache" set "value" = i:4` do erro). Com o construtor de
+  > formulário, cada tecla dispara uma requisição Livewire e as colisões viraram rotina.
+  > Hoje é `IMMEDIATE`, que pega o lock na abertura e faz quem chega depois **esperar a vez**.
+  >
+  > Reproduzido com dois processos — um lendo-e-escrevendo devagar, outro gravando no meio:
+  > com `DEFERRED` o erro é instantâneo; com `IMMEDIATE`, nenhum em 12 processos simultâneos.
+  > **`Cache::increment()` em paralelo sozinho não reproduz** (10 processos × 60 incrementos
+  > passam limpo): é preciso a leitura-depois-escrita com atraso no meio.
 
   > Erro de `rename(...tmp, ...)` em `storage/framework/views` na mesma situação é outra
   > coisa, e é transitório: logo depois de um `view:clear`, várias requisições paralelas
@@ -614,6 +898,15 @@ não repita a lógica de borda vermelha em cada formulário.
   Etapa que importa tem que ser derivada do que está gravado.
 - **`@php use ... @endphp` numa view Blade quebra com "unexpected token use"**: o `use` não
   fica no topo do arquivo compilado. Referencie pelo nome completo (`\App\Support\X::`).
+- **`tinker --execute` com `\$` quebra no PowerShell.** O shell deste projeto no Windows é o
+  PowerShell, que **não** usa barra invertida como escape: `\$u` chega literal ao PHP, que lê
+  a barra como separador de namespace e devolve
+  `PHP Parse error: syntax error, unexpected T_NS_SEPARATOR` — um erro que não aponta para a
+  causa. No PowerShell a variável se escreve `$u` dentro de aspas simples, ou `` `$u ``
+  (crase) dentro de aspas duplas. Melhor que acertar o escape: quando a operação vai ser
+  repetida, **faça um comando artisan** — é o que existe para `criar-admin` e
+  `criar-presidente`.
+
 - **Heredoc do bash come barra invertida.** `'/\\'` num `cat <<'PHP'` chegou no arquivo como
   `'/\'` e deixou a string aberta. Para código com escape, use a ferramenta de edição.
 - **Input com `wire:model` não renderiza `value` sozinho.** O estado viaja no snapshot e o
@@ -654,6 +947,19 @@ php artisan femopror:criar-admin
 
 Pede a senha interativamente (nunca como argumento, que ficaria no `~/.bash_history` e
 apareceria no `ps`), exige 12 caracteres e confirmação.
+
+Para o acesso de uma UMP local ao `/ump`:
+
+```bash
+php artisan femopror:criar-presidente
+```
+
+Mesmo formato, mais a escolha da igreja. Existe pela mesma razão: `is_church_president` e
+`church_id` **não são mass assignable** e não têm caminho pelo cadastro público nem pelo
+perfil — sem comando, só sobrava um one-liner de `tinker`, que é fácil de errar e deixa a
+senha no histórico do shell. Ele recusa promover um **admin da federação**: `church_id` nulo
+é o que faz o admin enxergar todas as igrejas, e amarrá-lo a uma UMP reduziria o escopo dele
+em silêncio.
 
 **Nunca `db:seed` em produção.** O `DatabaseSeeder` é ferramenta de desenvolvimento e agora
 lança exceção se `APP_ENV=production` — ele criava um admin com e-mail `a@a` e senha `123`.
